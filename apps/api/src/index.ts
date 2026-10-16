@@ -3,6 +3,7 @@ import { createApp } from './app.js';
 import { config } from './config.js';
 import { closeDatabasePool } from './db/client.js';
 import { closeRedisClient } from './redis/client.js';
+import { closePrismaClient } from './db/prisma.js';
 
 const app = createApp();
 
@@ -59,6 +60,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     await Promise.all([
       closeDatabasePool(),
       closeRedisClient(),
+      closePrismaClient(),
     ]);
 
     clearTimeout(shutdownTimeout);

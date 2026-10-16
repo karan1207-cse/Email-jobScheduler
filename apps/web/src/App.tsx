@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { HealthCheckResponse, ApiRootResponse } from '@reachinbox/shared';
+import type { HealthCheckResponse, ApiRootResponse, EmailDto, PaginatedResponse } from '@reachinbox/shared';
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '');
 
@@ -11,17 +11,28 @@ export const App: React.FC = () => {
   const [httpStatus, setHttpStatus] = useState<number | null>(null);
   const [lastChecked, setLastChecked] = useState<string | null>(null);
 
+  // Email API Test Console State (Milestone 2)
+  const [recipient, setRecipient] = useState<string>('demo@reachinbox.ai');
+  const [subject, setSubject] = useState<string>('ReachInbox Milestone 2 Test');
+  const [body, setBody] = useState<string>('Hello from the Email Scheduler API draft test.');
+  const [idempotencyKey, setIdempotencyKey] = useState<string>('');
+  const [apiConsoleLoading, setApiConsoleLoading] = useState<boolean>(false);
+  const [apiConsoleResponse, setApiConsoleResponse] = useState<{
+    status: number;
+    headers: Record<string, string>;
+    data: unknown;
+  } | null>(null);
+  const [apiConsoleError, setApiConsoleError] = useState<string | null>(null);
+
   const fetchStatus = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
-      // 1. Fetch root info
       const rootPromise = fetch(`${API_BASE_URL}/`, {
         headers: { Accept: 'application/json' },
       }).then((res) => (res.ok ? res.json() : null)).catch(() => null);
 
-      // 2. Fetch health status (returns 200 or 503 depending on dependency health)
       const healthRes = await fetch(`${API_BASE_URL}/health`, {
         headers: { Accept: 'application/json' },
       });
@@ -48,6 +59,70 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  const handleCreateDraft = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setApiConsoleLoading(true);
+    setApiConsoleError(null);
+    setApiConsoleResponse(null);
+
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      if (idempotencyKey.trim()) {
+        headers['Idempotency-Key'] = idempotencyKey.trim();
+      }
+
+      const res = await fetch(`${API_BASE_URL}/api/emails`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ recipient, subject, body }),
+      });
+
+      const resHeaders: Record<string, string> = {};
+      const replayHeader = res.headers.get('Idempotent-Replay');
+      if (replayHeader) {
+        resHeaders['Idempotent-Replay'] = replayHeader;
+      }
+
+      const json = await res.json();
+      setApiConsoleResponse({
+        status: res.status,
+        headers: resHeaders,
+        data: json,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Request failed';
+      setApiConsoleError(msg);
+    } finally {
+      setApiConsoleLoading(false);
+    }
+  };
+
+  const handleFetchDrafts = async () => {
+    setApiConsoleLoading(true);
+    setApiConsoleError(null);
+    setApiConsoleResponse(null);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/emails?page=1&limit=5`, {
+        headers: { Accept: 'application/json' },
+      });
+      const json = (await res.json()) as PaginatedResponse<EmailDto>;
+      setApiConsoleResponse({
+        status: res.status,
+        headers: {},
+        data: json,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Request failed';
+      setApiConsoleError(msg);
+    } finally {
+      setApiConsoleLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchStatus();
   }, [fetchStatus]);
@@ -68,7 +143,7 @@ export const App: React.FC = () => {
           </div>
           <div className="brand-text">
             <h1>ReachInbox</h1>
-            <span>Email Job Scheduler &bull; Milestone 1</span>
+            <span>Email Job Scheduler &bull; Milestone 2</span>
           </div>
         </div>
 
@@ -101,12 +176,12 @@ export const App: React.FC = () => {
 
       {/* Hero */}
       <section className="hero">
-        <div className="hero-tag">FOUNDATION RELEASE &bull; MILESTONE 1</div>
+        <div className="hero-tag">FOUNDATION &bull; MILESTONE 2: DATABASE &amp; EMAIL API</div>
         <h2>Distributed Delayed Email Engine</h2>
         <p>
-          ReachInbox is a high-throughput, fault-tolerant email scheduling platform designed with Node.js,
-          TypeScript, Redis, and PostgreSQL. Milestone 1 establishes the monorepo architecture, shared type
-          contracts, and verified health telemetry.
+          ReachInbox is a high-throughput, fault-tolerant email scheduling platform. Milestone 2 integrates
+          Prisma ORM, relational email schema, draft management APIs, strict idempotency keys, and transactional
+          outbox preparation.
         </p>
         <div className="hero-meta">
           <div className="meta-item">
@@ -184,7 +259,7 @@ export const App: React.FC = () => {
                 {healthData?.services.database.status?.toUpperCase() || 'UNKNOWN'}
               </span>
             </div>
-            <h3>PostgreSQL 16</h3>
+            <h3>PostgreSQL 16 &amp; Prisma</h3>
             <p>
               Connection pool status & query check.
               {healthData?.services.database.latencyMs !== undefined && (
@@ -225,14 +300,139 @@ export const App: React.FC = () => {
             </div>
           </div>
         </div>
+      </section>
 
-        {/* Live Payload Preview */}
-        {healthData && (
+      {/* Email Draft API Console (Milestone 2 Interactive Verification) */}
+      <section className="health-panel">
+        <div className="panel-header">
           <div>
-            <span className="meta-label" style={{ display: 'block', marginBottom: '0.4rem' }}>
-              Raw Response Payload (GET /health)
-            </span>
-            <pre className="code-block">{JSON.stringify(healthData, null, 2)}</pre>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Email Draft API Smoke Tester</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+              Test live calls to <code style={{ color: '#a5b4fc' }}>POST /api/emails</code> and{' '}
+              <code style={{ color: '#a5b4fc' }}>GET /api/emails</code> with Idempotency Key validation.
+            </p>
+          </div>
+          <button className="btn btn-secondary" onClick={handleFetchDrafts} disabled={apiConsoleLoading}>
+            List Drafts (GET /api/emails)
+          </button>
+        </div>
+
+        <form onSubmit={handleCreateDraft} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
+          <div>
+            <label className="meta-label" style={{ display: 'block', marginBottom: '0.35rem' }}>Recipient Email</label>
+            <input
+              type="email"
+              value={recipient}
+              onChange={(e) => setRecipient(e.target.value)}
+              required
+              style={{
+                width: '100%',
+                padding: '0.55rem 0.75rem',
+                backgroundColor: '#0a0d14',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: '6px',
+                color: 'var(--text-main)',
+                fontFamily: 'inherit',
+                fontSize: '0.85rem',
+              }}
+            />
+          </div>
+
+          <div>
+            <label className="meta-label" style={{ display: 'block', marginBottom: '0.35rem' }}>Subject Line</label>
+            <input
+              type="text"
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              required
+              style={{
+                width: '100%',
+                padding: '0.55rem 0.75rem',
+                backgroundColor: '#0a0d14',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: '6px',
+                color: 'var(--text-main)',
+                fontFamily: 'inherit',
+                fontSize: '0.85rem',
+              }}
+            />
+          </div>
+
+          <div>
+            <label className="meta-label" style={{ display: 'block', marginBottom: '0.35rem' }}>Optional Idempotency-Key</label>
+            <input
+              type="text"
+              placeholder="e.g. key-001"
+              value={idempotencyKey}
+              onChange={(e) => setIdempotencyKey(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.55rem 0.75rem',
+                backgroundColor: '#0a0d14',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: '6px',
+                color: 'var(--text-main)',
+                fontFamily: 'inherit',
+                fontSize: '0.85rem',
+              }}
+            />
+          </div>
+
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label className="meta-label" style={{ display: 'block', marginBottom: '0.35rem' }}>Email Body</label>
+            <textarea
+              rows={3}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              required
+              style={{
+                width: '100%',
+                padding: '0.55rem 0.75rem',
+                backgroundColor: '#0a0d14',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: '6px',
+                color: 'var(--text-main)',
+                fontFamily: 'inherit',
+                fontSize: '0.85rem',
+                resize: 'vertical',
+              }}
+            />
+          </div>
+
+          <div>
+            <button type="submit" className="btn" disabled={apiConsoleLoading}>
+              {apiConsoleLoading ? 'Dispatching...' : 'Create Draft (POST)'}
+            </button>
+          </div>
+        </form>
+
+        {apiConsoleError && (
+          <div
+            style={{
+              padding: '0.85rem 1rem',
+              backgroundColor: 'var(--danger-bg)',
+              border: '1px solid var(--danger-border)',
+              borderRadius: '8px',
+              color: '#fca5a5',
+              fontSize: '0.85rem',
+            }}
+          >
+            <strong>API Call Failed:</strong> {apiConsoleError}
+          </div>
+        )}
+
+        {apiConsoleResponse && (
+          <div>
+            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '0.4rem' }}>
+              <span className="meta-label">Response Code:</span>
+              <span className={`status-pill ${apiConsoleResponse.status < 300 ? 'healthy' : 'unhealthy'}`}>
+                HTTP {apiConsoleResponse.status}
+              </span>
+              {apiConsoleResponse.headers['Idempotent-Replay'] && (
+                <span className="badge-tag done">Idempotent-Replay: true</span>
+              )}
+            </div>
+            <pre className="code-block">{JSON.stringify(apiConsoleResponse.data, null, 2)}</pre>
           </div>
         )}
       </section>
@@ -249,7 +449,7 @@ export const App: React.FC = () => {
               <span className="badge-tag done">Verified</span>
             </div>
             <h3>@reachinbox/shared</h3>
-            <p>Type contracts for health responses, API schemas, and service statuses used across API and Web.</p>
+            <p>Shared contract types: EmailDto, CreateEmailInput, UpdateEmailInput, PaginatedResponse, and Health status.</p>
             <div className="card-footer">
               <span className="meta-label">Location</span>
               <span className="meta-val">packages/shared</span>
@@ -262,7 +462,7 @@ export const App: React.FC = () => {
               <span className="badge-tag done">Verified</span>
             </div>
             <h3>@reachinbox/api</h3>
-            <p>Express 4 + TypeScript REST API featuring graceful shutdown, CORS security, and health checking.</p>
+            <p>Express REST API with Prisma ORM, Email CRUD, Zod schema validation, Idempotency headers, and Outbox helper.</p>
             <div className="card-footer">
               <span className="meta-label">Location</span>
               <span className="meta-val">apps/api</span>
@@ -275,7 +475,7 @@ export const App: React.FC = () => {
               <span className="badge-tag done">Verified</span>
             </div>
             <h3>@reachinbox/web</h3>
-            <p>React 18 + Vite + TypeScript frontend with live backend connectivity testing and design system.</p>
+            <p>React 18 + Vite frontend with real-time dependency telemetry and interactive Email Draft API tester.</p>
             <div className="card-footer">
               <span className="meta-label">Location</span>
               <span className="meta-val">apps/web</span>
@@ -285,7 +485,7 @@ export const App: React.FC = () => {
           <div className="card">
             <div className="card-header">
               <span className="meta-label">Worker Scaffold</span>
-              <span className="badge-tag upcoming">Milestone 2</span>
+              <span className="badge-tag upcoming">Milestone 3</span>
             </div>
             <h3>@reachinbox/worker</h3>
             <p>Background worker placeholder initialized and configured for BullMQ email queue processing.</p>
@@ -310,14 +510,24 @@ export const App: React.FC = () => {
                 Monorepo setup, shared types, Express REST API, React Vite frontend, Docker Compose setup.
               </div>
             </div>
+            <span className="badge-tag done">Completed</span>
+          </div>
+
+          <div className="roadmap-item active">
+            <div>
+              <strong>Milestone 2: Database Schema &amp; Email API</strong>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                Prisma ORM, PostgreSQL data models, Email CRUD, Idempotency key handling, transactional outbox pattern.
+              </div>
+            </div>
             <span className="badge-tag done">Current Milestone</span>
           </div>
 
           <div className="roadmap-item">
             <div>
-              <strong>Milestone 2: Redis, BullMQ Queue & Worker Engine</strong>
+              <strong>Milestone 3: Redis, BullMQ Queue &amp; Background Worker</strong>
               <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                Job scheduling, BullMQ queue producer & consumer, Ethereal SMTP test email dispatcher.
+                Job scheduling, BullMQ queue producer &amp; consumer, Ethereal SMTP test email dispatcher.
               </div>
             </div>
             <span className="badge-tag upcoming">Next Up</span>
@@ -325,17 +535,7 @@ export const App: React.FC = () => {
 
           <div className="roadmap-item">
             <div>
-              <strong>Milestone 3: PostgreSQL Data Persistence & Job History</strong>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                Database migrations, email status tracking, failure retries, and job audit trails.
-              </div>
-            </div>
-            <span className="badge-tag upcoming">Deferred</span>
-          </div>
-
-          <div className="roadmap-item">
-            <div>
-              <strong>Milestone 4: Google OAuth, Slack Notifications & Dashboard UI</strong>
+              <strong>Milestone 4: Google OAuth, Slack Notifications &amp; Dashboard UI</strong>
               <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                 User authentication, Slack alerts for rate-limits, and scheduled/sent email management UI.
               </div>

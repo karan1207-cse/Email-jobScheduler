@@ -5,27 +5,32 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
+    "prisma:generate": "prisma generate --schema=prisma/schema.prisma",
+    "prisma:migrate": "prisma migrate deploy --schema=prisma/schema.prisma",
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "npm run prisma:generate && tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.3",
     "@reachinbox/shared": "*",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "ioredis": "^5.6.0",
-    "pg": "^8.13.3"
+    "pg": "^8.13.3",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
-    "@types/node": "^22.13.9",
+    "@types/node": "^22.20.5",
     "@types/pg": "^8.11.11",
     "@types/supertest": "^6.0.2",
+    "prisma": "^6.19.3",
     "rimraf": "^6.0.1",
     "supertest": "^7.0.0",
     "tsx": "^4.19.3",

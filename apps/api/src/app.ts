@@ -3,6 +3,7 @@ import cors from 'cors';
 import { config } from './config.js';
 import { rootRouter } from './routes/root.js';
 import { healthRouter } from './routes/health.js';
+import { emailRouter } from './routes/email.routes.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 export function createApp(): Application {
@@ -12,8 +13,9 @@ export function createApp(): Application {
   app.use(
     cors({
       origin: [config.FRONTEND_URL, 'http://localhost:5173', 'http://127.0.0.1:5173'],
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
+      exposedHeaders: ['Idempotent-Replay'],
       credentials: true,
     })
   );
@@ -23,6 +25,7 @@ export function createApp(): Application {
   // Mount routers
   app.use(rootRouter);
   app.use(healthRouter);
+  app.use(emailRouter);
 
   // Error handling
   app.use(notFoundHandler);

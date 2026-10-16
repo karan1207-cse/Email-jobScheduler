@@ -1,0 +1,116 @@
+// ReachInbox Email Job Scheduler - Prisma Database Schema
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ==============================================================================
+// Enums
+// ==============================================================================
+
+enum EmailStatus {
+  DRAFT
+  SCHEDULED
+  PROCESSING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum OutboxEventStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+// ==============================================================================
+// Models
+// ==============================================================================
+
+model User {
+  id           String      @id @default(uuid())
+  email        String      @unique
+  displayName  String?     @map("display_name")
+  providerId   String?     @map("provider_id") // For future Google OAuth
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  emails       Email[]
+  leads        Lead[]
+  batches      LeadBatch[]
+
+  @@map("users")
+}
+
+model Email {
+  id                 String       @id @default(uuid())
+  userId             String       @map("user_id")
+  user               User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipient          String       @db.VarChar(320)
+  subject            String       @db.VarChar(500)
+  body               String       @db.Text
+  status             EmailStatus  @default(DRAFT)
+  scheduledTime      DateTime?    @map("scheduled_time")
+  sentAt             DateTime?    @map("sent_at")
+  idempotencyKey     String?      @map("idempotency_key") @db.VarChar(255)
+  requestFingerprint String?      @map("request_fingerprint") @db.VarChar(64) // SHA-256 hash of payload
+  attemptCount       Int          @default(0) @map("attempt_count")
+  lastError          String?      @map("last_error") @db.VarChar(1000)
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+
+  @@unique([userId, idempotencyKey], name: "userId_idempotencyKey")
+  @@index([userId, status])
+  @@index([status, scheduledTime])
+  @@index([createdAt])
+  @@map("emails")
+}
+
+model LeadBatch {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String   @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  leads     Lead[]
+
+  @@map("lead_batches")
+}
+
+model Lead {
+  id        String     @id @default(uuid())
+  userId    String     @map("user_id")
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email     String     @db.VarChar(320)
+  firstName String?    @map("first_name") @db.VarChar(100)
+  lastName  String?    @map("last_name") @db.VarChar(100)
+  batchId   String?    @map("batch_id")
+  batch     LeadBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  @@index([userId, email])
+  @@map("leads")
+}
+
+model OutboxEvent {
+  id           String            @id @default(uuid())
+  eventType    String            @map("event_type") @db.VarChar(100) // e.g. EMAIL_SCHEDULED, EMAIL_CREATED
+  aggregateId  String            @map("aggregate_id") @db.VarChar(255) // Target email ID or aggregate root
+  payload      Json
+  status       OutboxEventStatus @default(PENDING)
+  attemptCount Int               @default(0) @map("attempt_count")
+  lastError    String?           @map("last_error") @db.VarChar(1000)
+  processedAt  DateTime?         @map("processed_at")
+  createdAt    DateTime          @default(now()) @map("created_at")
+
+  @@index([status, createdAt])
+  @@index([aggregateId])
+  @@map("outbox_events")
+}

@@ -11,13 +11,17 @@
     "dev": "concurrently -k -p \"[{name}]\" -n \"API,WEB\" -c \"blue,green\" \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "npm run dev --workspace=@reachinbox/api",
     "dev:web": "npm run dev --workspace=@reachinbox/web",
+    "dev:worker": "npm run dev --workspace=@reachinbox/worker",
+    "dev:all": "concurrently -k -p \"[{name}]\" -n \"API,WORKER,WEB\" -c \"blue,cyan,green\" \"npm run dev:api\" \"npm run dev:worker\" \"npm run dev:web\"",
     "build:shared": "npm run build --workspace=@reachinbox/shared",
     "build:api": "npm run build --workspace=@reachinbox/api",
     "build:web": "npm run build --workspace=@reachinbox/web",
     "build:worker": "npm run build --workspace=@reachinbox/worker",
     "build": "npm run build:shared && npm run build:api && npm run build:web && npm run build:worker",
     "lint": "npm run build",
-    "test": "npm run test --workspace=@reachinbox/api",
+    "test": "npm run test --workspace=@reachinbox/api && npm run test --workspace=@reachinbox/worker",
+    "test:api": "npm run test --workspace=@reachinbox/api",
+    "test:worker": "npm run test --workspace=@reachinbox/worker",
     "clean": "npm run clean --workspaces --if-present"
   },
   "devDependencies": {

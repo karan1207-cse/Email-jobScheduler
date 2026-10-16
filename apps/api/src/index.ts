@@ -4,6 +4,8 @@ import { config } from './config.js';
 import { closeDatabasePool } from './db/client.js';
 import { closeRedisClient } from './redis/client.js';
 import { closePrismaClient } from './db/prisma.js';
+import { closeEmailQueue } from './queue/queue.js';
+import { recoverPendingOutboxEvents } from './services/scheduler.service.js';
 
 const app = createApp();
 
@@ -28,6 +30,12 @@ async function startServer(): Promise<void> {
         console.error('[Fatal Startup Error] Failed to start HTTP server:', err.message);
       }
       process.exit(1);
+    });
+
+    // Run outbox recovery after server is up (non-blocking)
+    recoverPendingOutboxEvents().catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('[OutboxRecovery] Startup recovery failed (non-fatal):', msg);
     });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -61,6 +69,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
       closeDatabasePool(),
       closeRedisClient(),
       closePrismaClient(),
+      closeEmailQueue(),
     ]);
 
     clearTimeout(shutdownTimeout);
@@ -93,3 +102,4 @@ process.on('unhandledRejection', (reason: unknown) => {
 });
 
 void startServer();
+

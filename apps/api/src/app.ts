@@ -4,6 +4,7 @@ import { config } from './config.js';
 import { rootRouter } from './routes/root.js';
 import { healthRouter } from './routes/health.js';
 import { emailRouter } from './routes/email.routes.js';
+import { schedulerRouter } from './routes/scheduler.routes.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 export function createApp(): Application {
@@ -26,6 +27,7 @@ export function createApp(): Application {
   app.use(rootRouter);
   app.use(healthRouter);
   app.use(emailRouter);
+  app.use(schedulerRouter);
 
   // Error handling
   app.use(notFoundHandler);

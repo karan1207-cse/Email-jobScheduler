@@ -11,11 +11,12 @@ ReachInbox is an enterprise-ready delayed email delivery platform. The system is
 ### Implementation Status
 - **Milestone 1 — System Foundation (COMPLETED):** Monorepo architecture, npm workspaces, strict TypeScript configuration, shared contracts package, Express REST API with real PostgreSQL & Redis health probes, React + Vite frontend with live telemetry dashboard, and Docker Compose development services.
 - **Milestone 2 — Database Schema & Email API (COMPLETED):** Prisma ORM integration, PostgreSQL relational data models (`User`, `Email`, `Lead`, `LeadBatch`, `OutboxEvent`), repeatable migrations, Email draft CRUD endpoints with Zod validation, Idempotency-Key support, and Transactional Outbox atomic scheduling pattern.
+- **Milestone 3 — BullMQ Delayed Scheduling & Worker Recovery (COMPLETED):** BullMQ queue engine, delayed job scheduler with deterministic IDs (`email:<id>`), separate background worker process (`@reachinbox/worker`), Ethereal test SMTP mailer with web preview URLs, exponential backoff retries, cancellation safety, and crash recovery for pending outbox events.
+- **Milestone 4 — Distributed Rate Limiting & Send Pacing (COMPLETED):** Atomic Redis Lua rate limiting (fixed-window hourly limit with automatic TTL expiry) and send pacing (`SET NX PX`), cross-process coordination across multiple worker instances, global vs per-sender scoping, non-blocking BullMQ job deferrals (`job.moveToDelayed`) without retry-count consumption, and fail-safe Redis error handling.
 
 > [!NOTE]
 > **Features Deliberately Deferred to Later Milestones:**
-> - **Milestone 3:** BullMQ queue engine, delayed email dispatcher, worker process, Ethereal test SMTP integration, background outbox event processing.
-> - **Milestone 4:** Google OAuth 2.0 authentication, Slack rate-limit webhook notifications, Elasticsearch search index, and complete analytics dashboard.
+> - **Milestone 5+:** Google OAuth 2.0 authentication, Slack rate-limit webhook notifications, Elasticsearch search index, and complete analytics dashboard.
 
 ---
 
@@ -323,18 +324,41 @@ npm run dev:web
 
 ---
 
-## 8. Available npm Scripts
+## 8. Distributed Rate Limiting & Pacing (Milestone 4)
+
+ReachInbox implements cross-process rate limiting and send pacing using Redis Lua scripts:
+
+- **Hourly Rate Limiting:** Fixed-window counter with atomic `INCR` + `EXPIRE` (3600s TTL). If the limit is reached, the remaining window TTL is returned and the counter is decremented.
+- **Send Pacing:** Atomic `SET key 1 NX PX <intervalMs>` enforces a minimum delay between consecutive send attempts without sleeping or blocking worker threads. If blocked, the hourly reservation is rolled back.
+- **Safe Rescheduling:** Rate-limited jobs are moved to delayed state via `job.moveToDelayed(Date.now() + retryAfterMs)` and DB status is reverted to `SCHEDULED` without incrementing `attemptCount` or consuming BullMQ retry attempts.
+- **Fail-Safe Design:** If Redis is down, jobs fail transiently and back off safely without sending unregulated emails.
+
+### Environment Configuration
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `WORKER_CONCURRENCY` | `5` | Concurrent jobs per worker process |
+| `RATE_LIMIT_MAX_PER_HOUR` | `100` | Max emails per hour across all workers (0 = unlimited) |
+| `RATE_LIMIT_INTERVAL_MS` | `1000` | Minimum milliseconds between consecutive sends (0 = no pacing) |
+| `RATE_LIMIT_SCOPE` | `global` | `global` (shared) or `per-sender` (isolated by user ID) |
+| `RATE_LIMIT_KEY_PREFIX` | `rl:reachinbox` | Redis key prefix for coordination |
+
+---
+
+## 9. Available npm Scripts
 
 | Script | Purpose |
 | :--- | :--- |
 | `npm run dev` | Runs API (`5000`) and Web (`5173`) concurrently |
 | `npm run dev:api` | Runs API in watch mode via `tsx` |
 | `npm run dev:web` | Runs Vite frontend dev server |
-| `npm run build` | Compiles `@reachinbox/shared`, `@reachinbox/api` (Prisma + TS), `@reachinbox/web`, and `@reachinbox/worker` |
+| `npm run dev:worker` | Runs worker in watch mode via `tsx` |
+| `npm run build` | Compiles `@reachinbox/shared`, `@reachinbox/api`, `@reachinbox/web`, and `@reachinbox/worker` |
 | `npm run build:shared`| Compiles shared TypeScript contract types |
 | `npm run build:api` | Generates Prisma Client & compiles Express backend TypeScript |
 | `npm run build:web` | Compiles React + Vite production bundle |
-| `npm run build:worker`| Compiles worker scaffold TypeScript |
-| `npm test` | Runs the automated test suite in `apps/api` with Vitest (23 tests) |
+| `npm run build:worker`| Compiles worker TypeScript |
+| `npm test` | Runs the full automated test suite (72 tests: 33 API + 39 Worker) |
 | `npm run lint` | Runs TypeScript compilation checks across the monorepo |
 | `npm run clean` | Removes `dist/` folders from all packages |
+

@@ -1,6 +1,7 @@
 /**
- * Worker Configuration
- * Loads environment variables and validates required settings.
+ * Worker Configuration — Milestone 4
+ * Loads environment variables, validates required settings,
+ * and rejects invalid/nonsensical values at startup.
  */
 import path from 'node:path';
 import fs from 'node:fs';
@@ -21,26 +22,85 @@ for (const envPath of candidateEnvPaths) {
   }
 }
 
-function required(key: string): string {
-  const value = process.env[key];
+export function required(key: string, env: Record<string, string | undefined> = process.env): string {
+  const value = env[key];
   if (!value) throw new Error(`[Worker Config] Missing required environment variable: ${key}`);
   return value;
 }
 
-function optional(key: string, fallback: string): string {
-  return process.env[key] ?? fallback;
+export function optional(key: string, fallback: string, env: Record<string, string | undefined> = process.env): string {
+  return env[key] ?? fallback;
 }
+
+export function positiveInt(key: string, fallback: number, env: Record<string, string | undefined> = process.env): number {
+  const raw = env[key];
+  if (!raw) return fallback;
+  const parsed = parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    throw new Error(`[Worker Config] ${key} must be a non-negative integer. Got: '${raw}'`);
+  }
+  return parsed;
+}
+
+export function positiveIntRequired(key: string, fallback: number, env: Record<string, string | undefined> = process.env): number {
+  const value = positiveInt(key, fallback, env);
+  if (value <= 0 && env[key] !== undefined) {
+    throw new Error(`[Worker Config] ${key} must be a positive integer. Got: '${env[key]}'`);
+  }
+  return value;
+}
+
+export function parseRateLimitScope(raw: string): 'global' | 'per-sender' {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'global' || normalized === 'per-sender') return normalized;
+  throw new Error(
+    `[Worker Config] RATE_LIMIT_SCOPE must be 'global' or 'per-sender'. Got: '${raw}'`
+  );
+}
+
+// ── Build and validate config object ─────────────────────────────────────────
 
 export const workerConfig = {
   NODE_ENV: optional('NODE_ENV', 'development'),
   DATABASE_URL: required('DATABASE_URL'),
   REDIS_URL: optional('REDIS_URL', 'redis://localhost:6379'),
-  WORKER_CONCURRENCY: parseInt(optional('WORKER_CONCURRENCY', '5'), 10),
+  WORKER_CONCURRENCY: positiveIntRequired('WORKER_CONCURRENCY', 5),
 
   // Ethereal SMTP — auto-created test credentials if not set
   SMTP_HOST: optional('SMTP_HOST', ''),
-  SMTP_PORT: parseInt(optional('SMTP_PORT', '587'), 10),
+  SMTP_PORT: positiveInt('SMTP_PORT', 587),
   SMTP_USER: optional('SMTP_USER', ''),
   SMTP_PASS: optional('SMTP_PASS', ''),
   SMTP_FROM: optional('SMTP_FROM', 'ReachInbox <noreply@reachinbox.local>'),
+
+  // ── Rate Limiting (Milestone 4) ──────────────────────────────────────────
+  /** Maximum emails allowed per hourly window. 0 = unlimited. */
+  RATE_LIMIT_MAX_PER_HOUR: positiveInt('RATE_LIMIT_MAX_PER_HOUR', 100),
+  /** Minimum interval between consecutive sends, in milliseconds. 0 = no pacing. */
+  RATE_LIMIT_INTERVAL_MS: positiveInt('RATE_LIMIT_INTERVAL_MS', 1000),
+  /** Scope of the rate limit: 'global' (shared across all senders) or 'per-sender'. */
+  RATE_LIMIT_SCOPE: parseRateLimitScope(optional('RATE_LIMIT_SCOPE', 'global')),
+  /** Redis key prefix for rate-limit counters. Prevents collisions with other apps. */
+  RATE_LIMIT_KEY_PREFIX: optional('RATE_LIMIT_KEY_PREFIX', 'rl:reachinbox'),
 } as const;
+
+// ── Startup validation ──────────────────────────────────────────────────────
+
+if (workerConfig.WORKER_CONCURRENCY < 1) {
+  throw new Error('[Worker Config] WORKER_CONCURRENCY must be at least 1.');
+}
+
+if (workerConfig.RATE_LIMIT_MAX_PER_HOUR < 0) {
+  throw new Error('[Worker Config] RATE_LIMIT_MAX_PER_HOUR cannot be negative.');
+}
+
+if (workerConfig.RATE_LIMIT_INTERVAL_MS < 0) {
+  throw new Error('[Worker Config] RATE_LIMIT_INTERVAL_MS cannot be negative.');
+}
+
+// Log config (no secrets)
+console.log('[Worker Config] Rate limiting configuration:');
+console.log(`  MAX_PER_HOUR:  ${workerConfig.RATE_LIMIT_MAX_PER_HOUR}`);
+console.log(`  INTERVAL_MS:   ${workerConfig.RATE_LIMIT_INTERVAL_MS}`);
+console.log(`  SCOPE:         ${workerConfig.RATE_LIMIT_SCOPE}`);
+console.log(`  KEY_PREFIX:    ${workerConfig.RATE_LIMIT_KEY_PREFIX}`);

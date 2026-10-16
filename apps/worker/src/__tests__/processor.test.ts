@@ -1,6 +1,7 @@
 /**
- * Unit tests for Worker Job Processor
- * Mocks Prisma and the mailer to run without external services.
+ * Unit tests for Worker Job Processor (Milestone 4)
+ * Mocks Prisma, Nodemailer, and Redis to verify state transitions,
+ * rate limiting, pacing deferrals, and error recovery.
  */
 import { describe, it, expect, vi, beforeEach, type MockedFunction } from 'vitest';
 
@@ -19,14 +20,19 @@ vi.mock('../mailer.js', () => ({
 
 import { getPrisma } from '../prisma.js';
 import { sendEmail } from '../mailer.js';
-import { processEmailJob } from '../processor.js';
+import {
+  processEmailJob,
+  initRateLimiter,
+  RateLimitDeferralError,
+  type EmailJobData,
+} from '../processor.js';
 import type { Job } from 'bullmq';
-import type { EmailJobData } from '../processor.js';
+import type { Redis } from 'ioredis';
 
 function buildMockJob(
   data: Partial<EmailJobData> = {},
   opts: { attemptsMade?: number; attempts?: number } = {}
-): Job<EmailJobData> {
+): Job<EmailJobData> & { moveToDelayed: ReturnType<typeof vi.fn> } {
   return {
     id: 'job-test-1',
     name: 'send-email',
@@ -40,7 +46,9 @@ function buildMockJob(
     },
     attemptsMade: opts.attemptsMade ?? 0,
     opts: { attempts: opts.attempts ?? 3 },
-  } as unknown as Job<EmailJobData>;
+    token: 'test-lock-token',
+    moveToDelayed: vi.fn().mockResolvedValue(undefined),
+  } as unknown as Job<EmailJobData> & { moveToDelayed: ReturnType<typeof vi.fn> };
 }
 
 function buildMockPrisma(emailStatus = 'SCHEDULED') {
@@ -73,99 +81,220 @@ function buildMockPrisma(emailStatus = 'SCHEDULED') {
 describe('Worker Processor — processEmailJob', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    (sendEmail as MockedFunction<typeof sendEmail>).mockResolvedValue({
+      messageId: '<test-msg-id@ethereal.email>',
+      previewUrl: 'https://ethereal.email/message/test123',
+    });
+    initRateLimiter(null); // Default: rate limiter disabled unless explicitly set
   });
 
-  it('should discard job if email is not found in DB', async () => {
-    const prisma = buildMockPrisma();
-    prisma.email.findUnique.mockResolvedValue(null);
-    (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
+  describe('Core Delivery & Edge Cases', () => {
+    it('should discard job if email is not found in DB', async () => {
+      const prisma = buildMockPrisma();
+      prisma.email.findUnique.mockResolvedValue(null);
+      (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
 
-    const job = buildMockJob();
-    await expect(processEmailJob(job)).resolves.toBeUndefined();
-    expect(sendEmail).not.toHaveBeenCalled();
+      const job = buildMockJob();
+      await expect(processEmailJob(job)).resolves.toBeUndefined();
+      expect(sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('should discard job if email is already CANCELLED', async () => {
+      const prisma = buildMockPrisma('CANCELLED');
+      (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
+
+      const job = buildMockJob();
+      await expect(processEmailJob(job)).resolves.toBeUndefined();
+      expect(sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('should discard job idempotently if email is already SENT', async () => {
+      const prisma = buildMockPrisma('SENT');
+      (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
+
+      const job = buildMockJob();
+      await expect(processEmailJob(job)).resolves.toBeUndefined();
+      expect(sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('should send email and mark as SENT on success', async () => {
+      const prisma = buildMockPrisma('SCHEDULED');
+      (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
+
+      const job = buildMockJob();
+      await processEmailJob(job);
+
+      // Should have marked PROCESSING then SENT
+      expect(prisma.email.update).toHaveBeenCalledTimes(2);
+      expect(prisma.email.update).toHaveBeenNthCalledWith(1,
+        expect.objectContaining({ data: expect.objectContaining({ status: 'PROCESSING' }) })
+      );
+      expect(prisma.email.update).toHaveBeenNthCalledWith(2,
+        expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) })
+      );
+
+      // Should have created EMAIL_SENT outbox event
+      expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ eventType: 'EMAIL_SENT' }) })
+      );
+      expect(sendEmail).toHaveBeenCalledOnce();
+    });
+
+    it('should mark email as FAILED on last retry attempt and rethrow', async () => {
+      const prisma = buildMockPrisma('SCHEDULED');
+      (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
+      (sendEmail as MockedFunction<typeof sendEmail>).mockRejectedValue(
+        new Error('SMTP connection refused')
+      );
+
+      // Last attempt (attemptsMade=2 with attempts=3)
+      const job = buildMockJob({}, { attemptsMade: 2, attempts: 3 });
+      await expect(processEmailJob(job)).rejects.toThrow('SMTP connection refused');
+
+      // Should mark FAILED on last attempt
+      expect(prisma.email.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) })
+      );
+      expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ eventType: 'EMAIL_FAILED' }) })
+      );
+    });
+
+    it('should keep email as SCHEDULED on intermediate retry attempt and rethrow', async () => {
+      const prisma = buildMockPrisma('SCHEDULED');
+      (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
+      (sendEmail as MockedFunction<typeof sendEmail>).mockRejectedValue(
+        new Error('Temporary SMTP error')
+      );
+
+      // First attempt (attemptsMade=0, not last)
+      const job = buildMockJob({}, { attemptsMade: 0, attempts: 3 });
+      await expect(processEmailJob(job)).rejects.toThrow('Temporary SMTP error');
+
+      // Should revert to SCHEDULED (not FAILED) for retry
+      expect(prisma.email.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'SCHEDULED' }) })
+      );
+      // Should NOT create EMAIL_FAILED event yet
+      const createCalls = (prisma.outboxEvent.create as ReturnType<typeof vi.fn>).mock.calls;
+      const failedEvents = createCalls.filter(
+        (call: unknown[]) => (call[0] as { data?: { eventType?: string } })?.data?.eventType === 'EMAIL_FAILED'
+      );
+      expect(failedEvents).toHaveLength(0);
+    });
   });
 
-  it('should discard job if email is already CANCELLED', async () => {
-    const prisma = buildMockPrisma('CANCELLED');
-    (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
+  describe('Rate Limiting & Pacing Integration (Milestone 4)', () => {
+    let mockRedis: {
+      eval: ReturnType<typeof vi.fn>;
+      decr: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+    };
 
-    const job = buildMockJob();
-    await expect(processEmailJob(job)).resolves.toBeUndefined();
-    expect(sendEmail).not.toHaveBeenCalled();
-  });
+    beforeEach(() => {
+      mockRedis = {
+        eval: vi.fn(),
+        decr: vi.fn().mockResolvedValue(1),
+        get: vi.fn().mockResolvedValue('0'),
+      };
+      initRateLimiter(mockRedis as unknown as Redis);
+    });
 
-  it('should discard job idempotently if email is already SENT', async () => {
-    const prisma = buildMockPrisma('SENT');
-    (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
+    it('should proceed to send when rate limiter allows send', async () => {
+      mockRedis.eval.mockResolvedValueOnce([0, 0]); // Hourly allowed
+      mockRedis.eval.mockResolvedValueOnce([0, 0]); // Pacing allowed
 
-    const job = buildMockJob();
-    await expect(processEmailJob(job)).resolves.toBeUndefined();
-    expect(sendEmail).not.toHaveBeenCalled();
-  });
+      const prisma = buildMockPrisma('SCHEDULED');
+      (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
 
-  it('should send email and mark as SENT on success', async () => {
-    const prisma = buildMockPrisma('SCHEDULED');
-    (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
+      const job = buildMockJob();
+      await processEmailJob(job);
 
-    const job = buildMockJob();
-    await processEmailJob(job);
+      expect(sendEmail).toHaveBeenCalledOnce();
+      expect(prisma.email.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) })
+      );
+    });
 
-    // Should have marked PROCESSING then SENT
-    expect(prisma.email.update).toHaveBeenCalledTimes(2);
-    expect(prisma.email.update).toHaveBeenNthCalledWith(1,
-      expect.objectContaining({ data: expect.objectContaining({ status: 'PROCESSING' }) })
-    );
-    expect(prisma.email.update).toHaveBeenNthCalledWith(2,
-      expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) })
-    );
+    it('should defer job when hourly rate limit is reached without consuming retry attempt', async () => {
+      mockRedis.eval.mockResolvedValueOnce([1, 1800]); // Hourly blocked, 1800s TTL
 
-    // Should have created EMAIL_SENT outbox event
-    expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ eventType: 'EMAIL_SENT' }) })
-    );
-    expect(sendEmail).toHaveBeenCalledOnce();
-  });
+      const prisma = buildMockPrisma('SCHEDULED');
+      (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
 
-  it('should mark email as FAILED on last retry attempt and rethrow', async () => {
-    const prisma = buildMockPrisma('SCHEDULED');
-    (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
-    (sendEmail as MockedFunction<typeof sendEmail>).mockRejectedValue(
-      new Error('SMTP connection refused')
-    );
+      const job = buildMockJob();
 
-    // Last attempt (attemptsMade=2 with attempts=3)
-    const job = buildMockJob({}, { attemptsMade: 2, attempts: 3 });
-    await expect(processEmailJob(job)).rejects.toThrow('SMTP connection refused');
+      await expect(processEmailJob(job)).rejects.toThrow(RateLimitDeferralError);
 
-    // Should mark FAILED on last attempt
-    expect(prisma.email.update).toHaveBeenLastCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) })
-    );
-    expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ eventType: 'EMAIL_FAILED' }) })
-    );
-  });
+      // Should NOT attempt SMTP
+      expect(sendEmail).not.toHaveBeenCalled();
 
-  it('should keep email as SCHEDULED on intermediate retry attempt and rethrow', async () => {
-    const prisma = buildMockPrisma('SCHEDULED');
-    (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
-    (sendEmail as MockedFunction<typeof sendEmail>).mockRejectedValue(
-      new Error('Temporary SMTP error')
-    );
+      // Should have reverted DB status back to SCHEDULED and decremented attempt count
+      expect(prisma.email.update).toHaveBeenLastCalledWith({
+        where: { id: 'email-uuid-1' },
+        data: {
+          status: 'SCHEDULED',
+          attemptCount: { decrement: 1 },
+        },
+      });
 
-    // First attempt (attemptsMade=0, not last)
-    const job = buildMockJob({}, { attemptsMade: 0, attempts: 3 });
-    await expect(processEmailJob(job)).rejects.toThrow('Temporary SMTP error');
+      // Should have rescheduled via moveToDelayed with future timestamp
+      expect(job.moveToDelayed).toHaveBeenCalledOnce();
+      const call = job.moveToDelayed.mock.calls[0]!;
+      expect(call[0]).toBeGreaterThan(Date.now());
+      expect(call[1]).toBe('test-lock-token');
 
-    // Should revert to SCHEDULED (not FAILED) for retry
-    expect(prisma.email.update).toHaveBeenLastCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: 'SCHEDULED' }) })
-    );
-    // Should NOT create EMAIL_FAILED event yet
-    const createCalls = (prisma.outboxEvent.create as ReturnType<typeof vi.fn>).mock.calls;
-    const failedEvents = createCalls.filter(
-      (call: unknown[]) => (call[0] as { data?: { eventType?: string } })?.data?.eventType === 'EMAIL_FAILED'
-    );
-    expect(failedEvents).toHaveLength(0);
+      // Must NOT be marked as FAILED or create EMAIL_FAILED event
+      expect(prisma.outboxEvent.create).not.toHaveBeenCalled();
+    });
+
+    it('should defer job when pacing interval is active', async () => {
+      mockRedis.eval.mockResolvedValueOnce([0, 0]); // Hourly allowed
+      mockRedis.eval.mockResolvedValueOnce([1, 500]); // Pacing blocked, 500ms remaining
+
+      const prisma = buildMockPrisma('SCHEDULED');
+      (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
+
+      const job = buildMockJob();
+
+      await expect(processEmailJob(job)).rejects.toThrow(RateLimitDeferralError);
+
+      // Should NOT attempt SMTP
+      expect(sendEmail).not.toHaveBeenCalled();
+
+      // Should revert status to SCHEDULED
+      expect(prisma.email.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'SCHEDULED' }) })
+      );
+
+      // Should move job to delayed
+      expect(job.moveToDelayed).toHaveBeenCalledOnce();
+      const pacingCall = job.moveToDelayed.mock.calls[0]!;
+      expect(pacingCall[0]).toBeGreaterThanOrEqual(Date.now() + 450);
+    });
+
+    it('should fail safely if Redis throws error during rate limiting — no unregulated sends', async () => {
+      mockRedis.eval.mockRejectedValueOnce(new Error('Redis connection down'));
+
+      const prisma = buildMockPrisma('SCHEDULED');
+      (getPrisma as MockedFunction<typeof getPrisma>).mockReturnValue(prisma as never);
+
+      const job = buildMockJob();
+
+      await expect(processEmailJob(job)).rejects.toThrow('Redis connection down');
+
+      // Absolutely NO SMTP send allowed when Redis fails
+      expect(sendEmail).not.toHaveBeenCalled();
+
+      // Email reverted to SCHEDULED with lastError recorded
+      expect(prisma.email.update).toHaveBeenLastCalledWith({
+        where: { id: 'email-uuid-1' },
+        data: {
+          status: 'SCHEDULED',
+          attemptCount: { decrement: 1 },
+          lastError: expect.stringContaining('Rate limiter unavailable'),
+        },
+      });
+    });
   });
 });

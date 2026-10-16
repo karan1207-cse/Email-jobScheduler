@@ -66,6 +66,7 @@ function buildMockPrisma(emailOverrides: Record<string, unknown> = {}) {
       findFirst: vi.fn().mockResolvedValue(email),
       findUnique: vi.fn().mockResolvedValue(email),
       update: vi.fn().mockResolvedValue(cancelledEmail),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     outboxEvent: {
       create: vi.fn().mockResolvedValue({ id: 'outbox-uuid-2' }),
@@ -158,15 +159,29 @@ describe('Scheduler Service — cancelScheduledEmail', () => {
       .rejects.toThrow("Cannot cancel email with status 'DRAFT'.");
   });
 
-  it('should successfully cancel a SCHEDULED email', async () => {
+  it('should successfully cancel a SCHEDULED email via atomic conditional update', async () => {
     const { prisma } = buildMockPrisma({ status: 'SCHEDULED' });
     (getPrismaClient as MockedFunction<typeof getPrismaClient>).mockReturnValue(prisma as never);
 
     const result = await cancelScheduledEmail('email-uuid-1');
     expect(result.status).toBe('CANCELLED');
-    expect(prisma.email.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { status: 'CANCELLED' } })
+    expect(prisma.email.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'email-uuid-1', status: 'SCHEDULED' },
+        data: { status: 'CANCELLED' },
+      })
     );
+  });
+
+  it('should throw ConflictError if email was claimed or sent concurrently during cancellation', async () => {
+    const { prisma } = buildMockPrisma({ status: 'SCHEDULED' });
+    // Simulate concurrent worker transition: updateMany matches 0 rows
+    prisma.email.updateMany.mockResolvedValue({ count: 0 });
+    prisma.email.findUnique.mockResolvedValue(buildMockEmail({ status: 'PROCESSING' }));
+    (getPrismaClient as MockedFunction<typeof getPrismaClient>).mockReturnValue(prisma as never);
+
+    await expect(cancelScheduledEmail('email-uuid-1'))
+      .rejects.toThrow("Cannot cancel email with status 'PROCESSING'.");
   });
 });
 

@@ -84,6 +84,38 @@ export const workerConfig = {
   RATE_LIMIT_KEY_PREFIX: optional('RATE_LIMIT_KEY_PREFIX', 'rl:reachinbox'),
 } as const;
 
+export function validateSmtpConfig(config: {
+  NODE_ENV: string;
+  SMTP_HOST: string;
+  SMTP_PORT: number;
+  SMTP_USER: string;
+  SMTP_PASS: string;
+  SMTP_FROM: string;
+}): void {
+  if (config.SMTP_PORT < 1 || config.SMTP_PORT > 65535) {
+    throw new Error(`[Worker Config] SMTP_PORT must be between 1 and 65535. Got: '${config.SMTP_PORT}'`);
+  }
+
+  const hasAnySmtp = Boolean(config.SMTP_HOST || config.SMTP_USER || config.SMTP_PASS);
+  const hasFullSmtp = Boolean(config.SMTP_HOST && config.SMTP_USER && config.SMTP_PASS);
+
+  if (hasAnySmtp && !hasFullSmtp) {
+    throw new Error(
+      '[Worker Config] Partial SMTP configuration: SMTP_HOST, SMTP_USER, and SMTP_PASS must all be provided together.'
+    );
+  }
+
+  if (config.NODE_ENV === 'production' && !hasFullSmtp) {
+    throw new Error(
+      '[Worker Config] Production environment requires real SMTP configuration (SMTP_HOST, SMTP_USER, SMTP_PASS). Ethereal fallback is disabled in production.'
+    );
+  }
+
+  if (!config.SMTP_FROM || config.SMTP_FROM.trim().length === 0) {
+    throw new Error('[Worker Config] SMTP_FROM cannot be empty.');
+  }
+}
+
 // ── Startup validation ──────────────────────────────────────────────────────
 
 if (workerConfig.WORKER_CONCURRENCY < 1) {
@@ -97,6 +129,8 @@ if (workerConfig.RATE_LIMIT_MAX_PER_HOUR < 0) {
 if (workerConfig.RATE_LIMIT_INTERVAL_MS < 0) {
   throw new Error('[Worker Config] RATE_LIMIT_INTERVAL_MS cannot be negative.');
 }
+
+validateSmtpConfig(workerConfig);
 
 // Log config (no secrets)
 console.log('[Worker Config] Rate limiting configuration:');

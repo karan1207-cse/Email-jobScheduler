@@ -60,12 +60,15 @@ model Email {
   requestFingerprint String?      @map("request_fingerprint") @db.VarChar(64) // SHA-256 hash of payload
   attemptCount       Int          @default(0) @map("attempt_count")
   lastError          String?      @map("last_error") @db.VarChar(1000)
+  processingOwner    String?      @map("processing_owner") @db.VarChar(255)
+  leaseExpiresAt     DateTime?    @map("lease_expires_at")
   createdAt          DateTime     @default(now()) @map("created_at")
   updatedAt          DateTime     @updatedAt @map("updated_at")
 
   @@unique([userId, idempotencyKey], name: "userId_idempotencyKey")
   @@index([userId, status])
   @@index([status, scheduledTime])
+  @@index([status, leaseExpiresAt])
   @@index([createdAt])
   @@map("emails")
 }

@@ -21,25 +21,37 @@
  */
 import { describe, it, expect } from 'vitest';
 import { DelayedError } from 'bullmq';
-import { RateLimitDeferralError } from '../processor.js';
+import { RateLimitDeferralError, ActiveLeaseDeferralError } from '../processor.js';
 
 describe('Audit A — BullMQ DelayedError Contract Verification', () => {
   it('should inherit from BullMQ DelayedError', () => {
     const error = new RateLimitDeferralError(5000, 'Rate limit test');
     expect(error instanceof DelayedError).toBe(true);
     expect(error instanceof Error).toBe(true);
+
+    const leaseError = new ActiveLeaseDeferralError(5000, 'email-uuid-1');
+    expect(leaseError instanceof DelayedError).toBe(true);
+    expect(leaseError instanceof Error).toBe(true);
   });
 
   it('should have name equal to "DelayedError" for BullMQ duck-typing check', () => {
     const error = new RateLimitDeferralError(3600000, 'Hourly limit reached');
     expect(error.name).toBe('DelayedError');
+
+    const leaseError = new ActiveLeaseDeferralError(5000, 'email-uuid-1');
+    expect(leaseError.name).toBe('DelayedError');
   });
 
-  it('should expose retryAfterMs and reason metadata', () => {
+  it('should expose retryAfterMs and reason/emailId metadata', () => {
     const error = new RateLimitDeferralError(1500, 'Send pacing active');
     expect(error.retryAfterMs).toBe(1500);
     expect(error.reason).toBe('Send pacing active');
     expect(error.message).toContain('Send pacing active');
+
+    const leaseError = new ActiveLeaseDeferralError(3000, 'email-uuid-1');
+    expect(leaseError.retryAfterMs).toBe(3000);
+    expect(leaseError.emailId).toBe('email-uuid-1');
+    expect(leaseError.message).toContain('email-uuid-1');
   });
 
   it('should satisfy BullMQ handleFailed guard predicate', () => {
@@ -53,10 +65,12 @@ describe('Audit A — BullMQ DelayedError Contract Verification', () => {
     };
 
     const deferralError = new RateLimitDeferralError(1000, 'Pacing');
+    const leaseError = new ActiveLeaseDeferralError(5000, 'email-uuid-1');
     const genericError = new Error('SMTP connection refused');
 
-    // Deferral error must match
+    // Both deferral errors must match BullMQ DelayedError predicate
     expect(isBullMQDelayed(deferralError)).toBe(true);
+    expect(isBullMQDelayed(leaseError)).toBe(true);
 
     // Standard errors must NOT match
     expect(isBullMQDelayed(genericError)).toBe(false);

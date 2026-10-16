@@ -71,6 +71,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
             requestFingerprint: data.requestFingerprint || null,
             attemptCount: data.attemptCount || 0,
             lastError: data.lastError || null,
+            processingOwner: data.processingOwner || null,
+            leaseExpiresAt: data.leaseExpiresAt || null,
             createdAt: new Date(),
             updatedAt: new Date(),
           };
@@ -271,6 +273,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
           requestFingerprint: null,
           attemptCount: 0,
           lastError: null,
+          processingOwner: null,
+          leaseExpiresAt: null,
           createdAt: new Date(Date.now() - i * 1000),
           updatedAt: new Date(),
         });
@@ -315,6 +319,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         requestFingerprint: null,
         attemptCount: 0,
         lastError: null,
+        processingOwner: null,
+        leaseExpiresAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -362,6 +368,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         requestFingerprint: null,
         attemptCount: 0,
         lastError: null,
+        processingOwner: null,
+        leaseExpiresAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -379,6 +387,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         requestFingerprint: null,
         attemptCount: 1,
         lastError: null,
+        processingOwner: null,
+        leaseExpiresAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -430,6 +440,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         requestFingerprint: null,
         attemptCount: 0,
         lastError: null,
+        processingOwner: null,
+        leaseExpiresAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -447,6 +459,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         requestFingerprint: null,
         attemptCount: 0,
         lastError: null,
+        processingOwner: null,
+        leaseExpiresAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });

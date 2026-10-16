@@ -159,11 +159,25 @@ export async function cancelScheduledEmail(emailId: string): Promise<EmailDto> {
     console.warn(`[Scheduler] Could not remove BullMQ job for email ${emailId}: ${msg}`);
   }
 
-  // Update DB status
-  const updated = await prisma.email.update({
-    where: { id: emailId },
+  // Atomic conditional update: ensure status is STILL SCHEDULED at DB level
+  // If a worker claimed it (PROCESSING) or delivered it (SENT) concurrently,
+  // updateMany will match 0 rows, preventing cancellation from overwriting active/sent email.
+  const cancelResult = await prisma.email.updateMany({
+    where: { id: emailId, status: 'SCHEDULED' },
     data: { status: 'CANCELLED' },
   });
+
+  if (cancelResult.count === 0) {
+    const current = await prisma.email.findUnique({ where: { id: emailId } });
+    throw new ConflictError(
+      `Cannot cancel email with status '${current?.status}'. Only SCHEDULED emails can be cancelled.`
+    );
+  }
+
+  const updated = {
+    ...existing,
+    status: 'CANCELLED' as const,
+  };
 
   // Record cancellation in outbox for auditing
   await prisma.outboxEvent.create({

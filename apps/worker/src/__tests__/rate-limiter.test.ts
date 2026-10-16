@@ -1,5 +1,5 @@
 /**
- * Unit tests for DistributedRateLimiter (Milestone 4)
+ * Unit tests for DistributedRateLimiter (Milestone 4 Audit)
  * Mocks Redis client to test atomic Lua-based rate limiting and pacing.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -9,7 +9,6 @@ import type { Redis } from 'ioredis';
 describe('DistributedRateLimiter', () => {
   let mockRedis: {
     eval: ReturnType<typeof vi.fn>;
-    decr: ReturnType<typeof vi.fn>;
     get: ReturnType<typeof vi.fn>;
   };
   let limiter: DistributedRateLimiter;
@@ -18,29 +17,25 @@ describe('DistributedRateLimiter', () => {
     vi.clearAllMocks();
     mockRedis = {
       eval: vi.fn(),
-      decr: vi.fn().mockResolvedValue(1),
       get: vi.fn().mockResolvedValue('0'),
     };
     limiter = new DistributedRateLimiter(mockRedis as unknown as Redis);
   });
 
-  describe('acquireSendSlot', () => {
+  describe('acquireSendSlot — Atomic Multi-Key Lua Execution', () => {
     it('should allow send when capacity is available and pacing interval is clear', async () => {
-      // Hourly: allowed [0, 0]
-      mockRedis.eval.mockResolvedValueOnce([0, 0]);
-      // Pacing: allowed [0, 0]
+      // Lua script returns {0, 0} = allowed
       mockRedis.eval.mockResolvedValueOnce([0, 0]);
 
       const result = await limiter.acquireSendSlot('user-1');
 
       expect(result.allowed).toBe(true);
       expect(result.retryAfterMs).toBe(0);
-      expect(mockRedis.eval).toHaveBeenCalledTimes(2);
-      expect(mockRedis.decr).not.toHaveBeenCalled();
+      expect(mockRedis.eval).toHaveBeenCalledTimes(1);
     });
 
     it('should block send when hourly limit is reached and return retryAfterMs', async () => {
-      // Hourly: blocked [1, 1800] (1800 seconds remaining)
+      // Lua script returns {1, 1800} = hourly limit blocked, 1800s remaining TTL
       mockRedis.eval.mockResolvedValueOnce([1, 1800]);
 
       const result = await limiter.acquireSendSlot('user-1');
@@ -48,13 +43,11 @@ describe('DistributedRateLimiter', () => {
       expect(result.allowed).toBe(false);
       expect(result.retryAfterMs).toBe(1800 * 1000);
       expect(result.reason).toContain('Hourly rate limit reached');
-      // Should NOT proceed to pacing check
       expect(mockRedis.eval).toHaveBeenCalledTimes(1);
-      expect(mockRedis.decr).not.toHaveBeenCalled();
     });
 
     it('should enforce minimum 1000ms delay when hourly TTL is small', async () => {
-      // Hourly: blocked [1, 0] (less than 1s remaining)
+      // Lua script returns {1, 0} (<1s TTL)
       mockRedis.eval.mockResolvedValueOnce([1, 0]);
 
       const result = await limiter.acquireSendSlot('user-1');
@@ -63,24 +56,21 @@ describe('DistributedRateLimiter', () => {
       expect(result.retryAfterMs).toBe(1000); // Math.max(0, 1000)
     });
 
-    it('should block and roll back hourly count when pacing interval is active', async () => {
-      // Hourly: allowed [0, 0]
-      mockRedis.eval.mockResolvedValueOnce([0, 0]);
-      // Pacing: blocked [1, 650] (650ms remaining on pacing lock)
-      mockRedis.eval.mockResolvedValueOnce([1, 650]);
+    it('should block send when pacing interval is active without touching hourly counter', async () => {
+      // Lua script returns {2, 650} = pacing interval active, 650ms remaining
+      mockRedis.eval.mockResolvedValueOnce([2, 650]);
 
       const result = await limiter.acquireSendSlot('user-1');
 
       expect(result.allowed).toBe(false);
       expect(result.retryAfterMs).toBe(650);
       expect(result.reason).toContain('Send pacing: minimum');
-      // Must roll back the hourly reservation so blocked job does not consume capacity
-      expect(mockRedis.decr).toHaveBeenCalledTimes(1);
+      expect(mockRedis.eval).toHaveBeenCalledTimes(1);
     });
 
     it('should enforce minimum 100ms delay for pacing deferral', async () => {
-      mockRedis.eval.mockResolvedValueOnce([0, 0]);
-      mockRedis.eval.mockResolvedValueOnce([1, 20]); // 20ms remaining
+      // Lua script returns {2, 20} (20ms remaining)
+      mockRedis.eval.mockResolvedValueOnce([2, 20]);
 
       const result = await limiter.acquireSendSlot('user-1');
 
@@ -88,23 +78,15 @@ describe('DistributedRateLimiter', () => {
       expect(result.retryAfterMs).toBe(100); // Math.max(20, 100)
     });
 
-    it('should fail safely if Redis throws during hourly check without sending', async () => {
+    it('should fail safely if Redis throws during script evaluation without sending', async () => {
       mockRedis.eval.mockRejectedValueOnce(new Error('Redis connection lost'));
 
       await expect(limiter.acquireSendSlot('user-1')).rejects.toThrow('Redis connection lost');
-      expect(mockRedis.decr).not.toHaveBeenCalled();
-    });
-
-    it('should fail safely if Redis throws during pacing check', async () => {
-      mockRedis.eval.mockResolvedValueOnce([0, 0]);
-      mockRedis.eval.mockRejectedValueOnce(new Error('Redis timeout'));
-
-      await expect(limiter.acquireSendSlot('user-1')).rejects.toThrow('Redis timeout');
     });
   });
 
-  describe('Scope Configuration: global vs per-sender', () => {
-    it('should use global key prefix when scope is global', async () => {
+  describe('Scope Configuration & Cluster Hash-Tags', () => {
+    it('should use global key prefix with hash tags when scope is global', async () => {
       const globalLimiter = new DistributedRateLimiter(mockRedis as unknown as Redis, {
         scope: 'global',
         prefix: 'test-prefix',
@@ -113,18 +95,12 @@ describe('DistributedRateLimiter', () => {
 
       await globalLimiter.acquireSendSlot('user-123');
 
-      expect(mockRedis.eval).toHaveBeenNthCalledWith(
-        1,
+      expect(mockRedis.eval).toHaveBeenCalledWith(
         expect.any(String),
-        1,
-        'test-prefix:hourly:global',
-        expect.any(String)
-      );
-      expect(mockRedis.eval).toHaveBeenNthCalledWith(
         2,
+        'test-prefix:{global}:hourly',
+        'test-prefix:{global}:pace',
         expect.any(String),
-        1,
-        'test-prefix:pace:global',
         expect.any(String)
       );
     });
@@ -143,46 +119,23 @@ describe('DistributedRateLimiter', () => {
       expect(mockRedis.eval).toHaveBeenNthCalledWith(
         1,
         expect.any(String),
-        1,
-        'test-prefix:hourly:user:user-abc',
+        2,
+        'test-prefix:{user:user-abc}:hourly',
+        'test-prefix:{user:user-abc}:pace',
+        expect.any(String),
         expect.any(String)
       );
+
+      // Second sender
       expect(mockRedis.eval).toHaveBeenNthCalledWith(
         2,
         expect.any(String),
-        1,
-        'test-prefix:pace:user:user-abc',
-        expect.any(String)
-      );
-
-      // Second sender is isolated to its own user key
-      expect(mockRedis.eval).toHaveBeenNthCalledWith(
-        3,
+        2,
+        'test-prefix:{user:user-xyz}:hourly',
+        'test-prefix:{user:user-xyz}:pace',
         expect.any(String),
-        1,
-        'test-prefix:hourly:user:user-xyz',
         expect.any(String)
       );
-      expect(mockRedis.eval).toHaveBeenNthCalledWith(
-        4,
-        expect.any(String),
-        1,
-        'test-prefix:pace:user:user-xyz',
-        expect.any(String)
-      );
-    });
-
-    it('should skip pacing check when intervalMs is 0', async () => {
-      const unpacedLimiter = new DistributedRateLimiter(mockRedis as unknown as Redis, {
-        intervalMs: 0,
-      });
-      mockRedis.eval.mockResolvedValueOnce([0, 0]); // Hourly check
-
-      const result = await unpacedLimiter.acquireSendSlot('user-1');
-
-      expect(result.allowed).toBe(true);
-      // Only 1 eval call for hourly, pacing was skipped
-      expect(mockRedis.eval).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -192,25 +145,37 @@ describe('DistributedRateLimiter', () => {
       let pacingActive = false;
 
       // Realistic mock representing atomic Redis state across concurrent workers
-      mockRedis.eval.mockImplementation(async (_script: string, _numKeys: number, key: string) => {
-        if (key.includes(':hourly:')) {
+      mockRedis.eval.mockImplementation(async (
+        _script: string,
+        _numKeys: number,
+        _hourlyKey: string,
+        _pacingKey: string,
+        maxHourlyArg: string,
+        intervalMsArg: string
+      ) => {
+        const maxHourly = parseInt(maxHourlyArg, 10);
+        const intervalMs = parseInt(intervalMsArg, 10);
+
+        // 1. Pacing check
+        if (intervalMs > 0 && pacingActive) {
+          return [2, 1000]; // Pacing blocked
+        }
+
+        // 2. Hourly check
+        if (maxHourly > 0) {
           hourlyCounter++;
-          // Say limit is 3: first 3 pass, 4th and beyond are denied
           if (hourlyCounter > 3) {
-            return [1, 3600]; // Denied by hourly limit
+            hourlyCounter--;
+            return [1, 3600]; // Hourly limit reached
           }
-          return [0, 0]; // Allowed
         }
 
-        if (key.includes(':pace:')) {
-          if (pacingActive) {
-            return [1, 1000]; // Denied by pacing interval lock
-          }
-          pacingActive = true; // Lock pacing for first caller
-          return [0, 0]; // Allowed
+        // 3. Set pacing lock
+        if (intervalMs > 0) {
+          pacingActive = true;
         }
 
-        return [0, 0];
+        return [0, 0]; // Allowed
       });
 
       // 4 concurrent workers compete for slots
@@ -224,7 +189,7 @@ describe('DistributedRateLimiter', () => {
       const allowedCount = results.filter((r) => r.allowed).length;
       const deniedCount = results.filter((r) => !r.allowed).length;
 
-      // Exactly ONE worker should acquire the slot because of pacing interval
+      // Exactly ONE worker should acquire the slot because of the pacing lock
       expect(allowedCount).toBe(1);
       expect(deniedCount).toBe(3);
 
@@ -234,9 +199,6 @@ describe('DistributedRateLimiter', () => {
         expect(d.retryAfterMs).toBeGreaterThan(0);
         expect(d.reason).toBeDefined();
       }
-
-      // Rollback was called for workers that passed hourly but got blocked by pacing
-      expect(mockRedis.decr).toHaveBeenCalled();
     });
   });
 

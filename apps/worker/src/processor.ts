@@ -14,7 +14,7 @@
  * Rate-limit deferrals do NOT consume BullMQ retry attempts.
  * Redis failures are treated as transient errors — no unregulated sending.
  */
-import type { Job } from 'bullmq';
+import { type Job, DelayedError } from 'bullmq';
 import { getPrisma } from './prisma.js';
 import { sendEmail } from './mailer.js';
 import { DistributedRateLimiter } from './rate-limiter.js';
@@ -28,14 +28,19 @@ export interface EmailJobData {
   scheduledTime: string;
 }
 
-/** Sentinel error class for rate-limit deferrals — NOT an SMTP failure. */
-export class RateLimitDeferralError extends Error {
+/**
+ * Sentinel error class for rate-limit deferrals.
+ * Extends BullMQ's DelayedError so that BullMQ recognizes the job was moved
+ * to the delayed state, skips moveToFailed, skips emitting 'failed', and does
+ * NOT consume a retry attempt.
+ */
+export class RateLimitDeferralError extends DelayedError {
   constructor(
     public readonly retryAfterMs: number,
     public readonly reason: string
   ) {
     super(`Rate limited: ${reason}`);
-    this.name = 'RateLimitDeferralError';
+    this.name = 'DelayedError';
   }
 }
 
@@ -54,9 +59,10 @@ export function getRateLimiter(): DistributedRateLimiter | null {
  * Must throw to trigger a retry; must return normally to mark job complete.
  * Rate-limit deferrals return normally after rescheduling (no retry consumed).
  */
-export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
+export async function processEmailJob(job: Job<EmailJobData>, token?: string): Promise<void> {
   const { emailId, recipient, subject, body } = job.data;
   const prisma = getPrisma();
+  const lockToken = token ?? job.token;
 
   console.log(
     `[Worker] Processing job ${job.id} | emailId=${emailId} | attempt=${job.attemptsMade + 1}`
@@ -80,6 +86,8 @@ export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
     return;
   }
 
+  const initialAttemptCount = Math.max(0, email.attemptCount);
+
   // 2. Mark as PROCESSING and increment attempt counter
   await prisma.email.update({
     where: { id: emailId },
@@ -101,20 +109,20 @@ export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
           `Deferring for ${result.retryAfterMs}ms.`
         );
 
-        // Revert PROCESSING → SCHEDULED and undo the attempt increment
+        // Revert PROCESSING → SCHEDULED and restore the initial attempt count
         await prisma.email.update({
           where: { id: emailId },
           data: {
             status: 'SCHEDULED',
-            attemptCount: { decrement: 1 },
+            attemptCount: initialAttemptCount,
           },
         });
 
         // Move job to delayed state — does NOT consume a BullMQ retry attempt
-        await job.moveToDelayed(Date.now() + result.retryAfterMs, job.token);
+        await job.moveToDelayed(Date.now() + result.retryAfterMs, lockToken);
 
-        // Throw a special error so that BullMQ does NOT count this as an
-        // attempt. The moveToDelayed above already rescheduled it.
+        // Throw DelayedError so BullMQ recognizes this job as delayed, skips moveToFailed,
+        // and does NOT consume an attempt count.
         throw new RateLimitDeferralError(result.retryAfterMs, result.reason ?? 'Rate limited');
       }
     } catch (err: unknown) {
@@ -125,12 +133,12 @@ export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
       const errMsg = err instanceof Error ? err.message : String(err);
       console.error(`[Worker] ❌ Rate limiter error for email ${emailId}: ${errMsg}`);
 
-      // Revert PROCESSING → SCHEDULED and undo the attempt increment
+      // Revert PROCESSING → SCHEDULED and restore initial attempt count
       await prisma.email.update({
         where: { id: emailId },
         data: {
           status: 'SCHEDULED',
-          attemptCount: { decrement: 1 },
+          attemptCount: initialAttemptCount,
           lastError: `Rate limiter unavailable: ${errMsg.slice(0, 500)}`,
         },
       });

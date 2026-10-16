@@ -48,12 +48,12 @@ async function startWorker(): Promise<void> {
 
   worker = new Worker<EmailJobData>(
     EMAIL_QUEUE_NAME,
-    async (job: Job<EmailJobData>) => {
+    async (job: Job<EmailJobData>, token?: string) => {
       if (job.name !== EMAIL_JOB_NAME) {
         console.warn(`[Worker] Unknown job name '${job.name}', skipping.`);
         return;
       }
-      await processEmailJob(job);
+      await processEmailJob(job, token);
     },
     {
       connection: redisConnection,

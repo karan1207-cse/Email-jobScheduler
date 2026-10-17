@@ -11,6 +11,7 @@ import { slackRouter } from './routes/slack.routes.js';
 import { searchRouter } from './routes/search.routes.js';
 import { createQueueDashboard, DASHBOARD_BASE_PATH } from './queue/dashboard.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { createRedisSessionStore } from './auth/redis-session-store.js';
 
 export function createApp(): Application {
   const app = express();
@@ -61,11 +62,12 @@ export function createApp(): Application {
     })
   );
 
-  // Session middleware — HTTP-only, SameSite=Lax cookie
-  // In production set secure: true and use a real session store (e.g. Redis-backed)
+  // Session middleware — HTTP-only cookie. Sessions live in Redis so sign-ins
+  // survive API restarts and deploys; tests keep the in-memory store.
   app.use(
     session({
       name: 'reachinbox.sid',
+      store: config.NODE_ENV === 'test' ? undefined : createRedisSessionStore(config.REDIS_URL),
       secret: config.SESSION_SECRET,
       resave: false,
       saveUninitialized: false,

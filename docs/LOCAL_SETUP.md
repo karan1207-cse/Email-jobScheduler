@@ -41,7 +41,7 @@ cp .env.example .env
 Key variables for Milestone 9:
 ```env
 ELASTICSEARCH_URL=http://localhost:9200
-EMAIL_QUEUE_NAME=email-queue
+EMAIL_QUEUE_NAME=email-jobs
 # ADMIN_TOKEN=   # Leave unset in development; dashboard is localhost-only
 ```
 

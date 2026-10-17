@@ -1,364 +1,373 @@
-# ReachInbox — Full-Stack Email Job Scheduler
+# ReachInbox — Distributed Full-Stack Email Job Scheduler
 
-Production-grade, distributed email scheduling platform foundation built with React, Vite, Node.js, Express, TypeScript, PostgreSQL (Prisma ORM), and Redis.
-
----
-
-## 1. Project Overview
-
-ReachInbox is an enterprise-ready delayed email delivery platform. The system is designed to handle high-throughput email scheduling with granular concurrency control, retry policies, delivery auditing, and fault tolerance.
-
-### Implementation Status
-- **Milestone 1 — System Foundation (COMPLETED):** Monorepo architecture, npm workspaces, strict TypeScript configuration, shared contracts package, Express REST API with real PostgreSQL & Redis health probes, React + Vite frontend with live telemetry dashboard, and Docker Compose development services.
-- **Milestone 2 — Database Schema & Email API (COMPLETED):** Prisma ORM integration, PostgreSQL relational data models (`User`, `Email`, `Lead`, `LeadBatch`, `OutboxEvent`), repeatable migrations, Email draft CRUD endpoints with Zod validation, Idempotency-Key support, and Transactional Outbox atomic scheduling pattern.
-- **Milestone 3 — BullMQ Delayed Scheduling & Worker Recovery (COMPLETED):** BullMQ queue engine, delayed job scheduler with deterministic IDs (`email:<id>`), separate background worker process (`@reachinbox/worker`), Ethereal test SMTP mailer with web preview URLs, exponential backoff retries, cancellation safety, and crash recovery for pending outbox events.
-- **Milestone 4 — Distributed Rate Limiting & Send Pacing (COMPLETED):** Atomic Redis Lua rate limiting (fixed-window hourly limit with automatic TTL expiry) and send pacing (`SET NX PX`), cross-process coordination across multiple worker instances, global vs per-sender scoping, non-blocking BullMQ job deferrals (`job.moveToDelayed`) without retry-count consumption, and fail-safe Redis error handling.
-
-> [!NOTE]
-> **Features Deliberately Deferred to Later Milestones:**
-> - **Milestone 5+:** Google OAuth 2.0 authentication, Slack rate-limit webhook notifications, Elasticsearch search index, and complete analytics dashboard.
+Production-grade, distributed email scheduling platform engineered with React 18, Vite, Node.js, Express, TypeScript, PostgreSQL (Prisma ORM), Redis 7 (BullMQ), Elasticsearch 8, and Nodemailer.
 
 ---
 
-## 2. Technology Stack
+## 1. Project Overview & Problem Statement
 
-- **Monorepo:** npm workspaces
-- **Backend API:** Node.js (v20+ / v24+), Express 4, TypeScript, Prisma ORM 6, pg, ioredis, Zod
-- **Frontend App:** React 18, Vite 6, TypeScript, Lucide Icons, Modern Vanilla CSS Design System
-- **Database:** PostgreSQL 16 (Alpine) managed via Prisma Client
-- **In-Memory Store & Queue Broker:** Redis 7 (Alpine with Append-Only File `AOF` persistence)
-- **Scaffold Worker:** Dedicated worker package for future BullMQ background job processing
-- **Testing:** Vitest, Supertest (23 automated integration & unit tests)
+High-volume email outreach demands strict delivery guarantees:
+- **Zero duplicate sends**: Concurrent workers must never deliver the same message twice.
+- **Accurate scheduling**: Time-delayed delivery must survive API crashes, worker reboots, and network partitions.
+- **Provider rate compliance**: Hourly sending caps and pacing intervals must be coordinated atomically across independent worker processes.
+- **Delivery ambiguity resolution**: When an SMTP connection drops mid-transmission, systems must avoid naive automatic retries that cause duplicate customer emails.
+- **Multi-tenant security**: User data, leads, search results, and Slack alerts must remain strictly isolated per tenant.
+
+ReachInbox solves these challenges through a resilient, decoupled architecture combining a **Transactional Outbox Pattern**, **distributed Redis Lua sliding-window rate limiters**, **lease-based worker claims**, **Elasticsearch read-side indexing with Postgres fallback**, and **server-side Google & Slack OAuth 2.0**.
 
 ---
 
-## 3. Repository Structure
+## 2. Key Features
+
+- **Durable Delayed Scheduling**: Sub-second accurate email dispatch using BullMQ and Redis sorted sets without polling cron jobs.
+- **Transactional Outbox Pattern**: Atomic database transactions commit email records and outbox events together before queue dispatch.
+- **Distributed Rate Limiting & Pacing**: Atomic Redis Lua scripts enforce global/per-sender hourly quotas and minimum intervals between consecutive sends across multiple worker instances.
+- **Sentinel Deferrals via `DelayedError`**: Over-limit jobs are deferred using BullMQ's native delayed mechanism without consuming retry attempts or marking jobs as failed.
+- **SMTP Reliability & Quarantine**: Ethereal test SMTP integration with web preview URLs. Post-send DB failures undergo localized retries; ambiguous results enter operator quarantine to prevent blind duplicates.
+- **Google OAuth 2.0 & Multi-User Isolation**: Server-side authentication with HTTP-only, SameSite=Lax session cookies. All endpoints, queries, and search indices enforce strict `userId` tenant scoping.
+- **Rich Campaign Composer**: React 18 + Vite frontend with live lead CSV/TXT parsing, deduplication, syntax validation, scheduled/sent tabs, and real-time countdown badges.
+- **Slack OAuth 2.0 & Alert Deduplication**: Automated alerts on rate limit thresholds, deduplicated via Redis `SET NX EX 300` to prevent channel notification spam.
+- **Elasticsearch 8 Full-Text Search**: Sub-millisecond full-text search across subject, body, and recipients with status filters, date ranges, and automatic fallback to PostgreSQL if Elasticsearch is offline.
+- **BullMQ Queue Dashboard**: Embedded Bull Board UI (`/admin/queues`) protected by localhost IP checks in development and `X-Admin-Token` authentication in production.
+- **1,000-Job Load Tested**: Repeatable load verification proving zero lost jobs, zero duplicates, and clean mid-stream crash recovery.
+
+---
+
+## 3. Technology Stack
+
+| Layer | Technologies |
+|---|---|
+| **Monorepo** | npm workspaces, TypeScript 5.8 |
+| **API Server** | Node.js (v20+ / v24+), Express 4, TypeScript, Prisma ORM 6, Zod, Supertest |
+| **Worker Process** | BullMQ 6, ioredis 5, Nodemailer 6 |
+| **Frontend** | React 18, Vite 6, TypeScript, Lucide Icons, Modern Vanilla CSS Tokens |
+| **Primary Database** | PostgreSQL 16 (Alpine) with repeatable Prisma migrations |
+| **Broker & State** | Redis 7 (Alpine) with Append-Only File (`AOF`) persistence |
+| **Search Engine** | Elasticsearch 8.17 (single-node development container) |
+| **Testing** | Vitest 3, Supertest 7 (154 automated unit & integration tests) |
+
+---
+
+## 4. Architecture Diagram
+
+```mermaid
+flowchart TD
+    subgraph Client["Client Tier"]
+        UI["React 18 + Vite Frontend\n(apps/web: port 5173)\nCampaign Composer & Live Dashboard"]
+    end
+
+    subgraph API["API Server Tier (apps/api: port 5000)"]
+        AUTH["Auth Router\n(/auth/google, /auth/slack)"]
+        EMAIL["Email Router\n(/api/emails, /api/schedule, /api/cancel)"]
+        SEARCH["Search Router\n(/api/search/emails, /api/search/rebuild)"]
+        DASH["Queue Dashboard\n(/admin/queues - Bull Board)"]
+        GUARD["Auth & Token Guard\n(Session Cookie / X-Admin-Token)"]
+    end
+
+    subgraph DataTier["Data & Queue Tier"]
+        PG[("PostgreSQL 16\nAuthoritative Source of Truth\nUsers, Emails, OutboxEvents")]
+        REDIS[("Redis 7 (AOF)\nBullMQ 'email-jobs' Queue\nLua Rate Limiters & Deduplication")]
+        ES[("Elasticsearch 8.x\n'reachinbox_emails' Index\nRebuildable Search Replica")]
+    end
+
+    subgraph WorkerTier["Worker Tier (apps/worker)"]
+        WORKER["BullMQ Worker (apps/worker)\nConcurrency: 5-10 lanes"]
+        CLAIM["Atomic Lease Claim\n(120s processing lease)"]
+        LIMITER["Distributed Rate Limiter\n(Hourly cap + send pacing)"]
+        TRANSPORT["SMTP Mailer\n(Ethereal test transport)"]
+        AMBIGUOUS["Ambiguous Result Guard\n(Quarantine on uncertainty)"]
+    end
+
+    subgraph External["External Integrations"]
+        SLACK["Slack Webhook / API\n(Rate limit alerts)"]
+        ETHEREAL["Ethereal SMTP / Web Preview\n(ethereal.email)"]
+    end
+
+    UI -->|HTTP + Session Cookie| GUARD
+    GUARD --> AUTH
+    GUARD --> EMAIL
+    GUARD --> SEARCH
+    GUARD --> DASH
+
+    EMAIL -->|Prisma Transaction| PG
+    EMAIL -->|Outbox Enqueue| REDIS
+    SEARCH -->|Full-Text Query| ES
+    SEARCH -.->|Fallback on ES Down| PG
+
+    REDIS -->|Job Dispatch| WORKER
+    WORKER --> CLAIM
+    CLAIM -->|Validate & Lock| PG
+    CLAIM --> LIMITER
+    LIMITER -->|Check Lua Script| REDIS
+    LIMITER -->|If Denied: DelayedError| REDIS
+    LIMITER -->|If Permitted| TRANSPORT
+    TRANSPORT -->|SMTP Send| ETHEREAL
+    TRANSPORT -->|Alert on Cap| SLACK
+    TRANSPORT -->|Mark SENT / FAILED| PG
+    TRANSPORT -->|Async Re-index| ES
+    TRANSPORT -.->|Stale Worker Detected| AMBIGUOUS
+```
+
+---
+
+## 5. Monorepo Directory Structure
 
 ```text
 reachinbox-email-scheduler/
 ├── apps/
-│   ├── api/                     # Express + TypeScript REST API
+│   ├── api/                           # Express REST API & Authentication Server
 │   │   ├── prisma/
-│   │   │   ├── migrations/      # Repeatable SQL migrations (20261016_init)
-│   │   │   └── schema.prisma    # Prisma relational schema (User, Email, Lead, OutboxEvent)
+│   │   │   ├── migrations/            # Repeatable SQL schema migrations
+│   │   │   └── schema.prisma          # PostgreSQL relational schema
 │   │   ├── src/
-│   │   │   ├── __tests__/       # Vitest route, idempotency & health probe test suite
-│   │   │   ├── controllers/     # HTTP route controllers for emails and health
-│   │   │   ├── db/              # Prisma client & PostgreSQL pool connection
-│   │   │   ├── middleware/      # Zod validation & centralized error handlers
-│   │   │   ├── redis/           # ioredis client & PING health probe
-│   │   │   ├── routes/          # Express route definitions (/api/emails, /, /health)
-│   │   │   ├── services/        # Business logic: email.service.ts & outbox.service.ts
-│   │   │   ├── validations/     # Zod request validation schemas
-│   │   │   ├── app.ts           # Express application factory (CORS, JSON, routes)
-│   │   │   ├── config.ts        # Environment loading & validation
-│   │   │   └── index.ts         # Server boot & graceful shutdown
-│   │   ├── package.json
-│   │   └── tsconfig.json
-│   ├── web/                     # React + Vite + TypeScript Frontend
+│   │   │   ├── __tests__/             # 8 test suites (82 passing tests)
+│   │   │   ├── controllers/           # HTTP route handlers
+│   │   │   ├── db/                    # Prisma client singleton
+│   │   │   ├── middleware/            # Auth guard, Zod validation, error handler
+│   │   │   ├── queue/                 # BullMQ queue client & Bull Board dashboard
+│   │   │   ├── redis/                 # ioredis client
+│   │   │   ├── routes/                # Auth, email, scheduler, search, slack routes
+│   │   │   ├── services/              # Email, scheduler, outbox, ES, Slack services
+│   │   │   ├── validations/           # Zod input schemas
+│   │   │   ├── app.ts                 # Express factory & router mounts
+│   │   │   ├── config.ts              # Validated environment configuration
+│   │   │   └── index.ts               # Server entrypoint & graceful shutdown
+│   │   └── package.json
+│   ├── web/                           # React 18 + Vite Frontend Application
 │   │   ├── src/
-│   │   │   ├── components/      # Header, HealthCard, MilestoneOverview, Footer
-│   │   │   ├── api.ts           # Real backend fetch client
-│   │   │   ├── App.tsx          # Real-time health dashboard & Email Draft test console
-│   │   │   ├── index.css        # Modern design system & CSS tokens
-│   │   │   └── main.tsx         # React DOM root entrypoint
-│   │   ├── index.html
-│   │   ├── package.json
-│   │   ├── tsconfig.json
-│   │   └── vite.config.ts
-│   └── worker/                  # Background Worker Scaffold (Milestone 3)
+│   │   │   ├── components/            # Campaign composer, tables, Slack settings
+│   │   │   ├── api.ts                 # Typed REST client
+│   │   │   ├── App.tsx                # Main single-page application & routing
+│   │   │   ├── index.css              # Glassmorphic CSS design system
+│   │   │   └── main.tsx               # DOM root
+│   │   └── package.json
+│   └── worker/                        # Background BullMQ Worker Process
 │       ├── src/
-│       │   └── index.ts         # Worker scaffold placeholder
-│       ├── package.json
-│       └── tsconfig.json
+│       │   ├── __tests__/             # 6 test suites (72 passing tests)
+│       │   ├── config.ts              # Worker environment parsing
+│       │   ├── es-indexer.ts          # Async Elasticsearch status indexer
+│       │   ├── mailer.ts              # Nodemailer Ethereal SMTP transporter
+│       │   ├── processor.ts           # Atomic claim, lease, quarantine, retry logic
+│       │   ├── rate-limiter.ts        # Redis Lua sliding window rate limiter
+│       │   ├── slack-alert.ts         # Worker rate limit Slack notifier
+│       │   └── index.ts               # Worker entrypoint & signal handlers
+│       └── package.json
 ├── packages/
-│   └── shared/                  # Shared TypeScript Contracts & Types
-│       ├── src/
-│       │   └── index.ts         # EmailDto, CreateEmailInput, HealthCheckResponse, etc.
-│       ├── package.json
-│       └── tsconfig.json
-├── .env.example                 # Tracked example environment template
-├── .gitignore                   # Excludes node_modules, dist, .env, scratch
-├── docker-compose.yml           # Pinned PostgreSQL 16 & Redis 7 services
-├── package.json                 # Monorepo root workspace configuration
-├── package-lock.json            # Deterministic lockfile
-├── tsconfig.base.json           # Strict base TypeScript compiler options
-└── README.md                    # Project documentation
+│   └── shared/                        # Shared TypeScript DTOs & Contracts
+│       ├── src/index.ts               # EmailDto, CreateEmailInput, LeadDto, etc.
+│       └── package.json
+├── docs/                              # Project Documentation
+│   ├── DECISIONS_AND_LIMITATIONS.md   # Architectural tradeoffs & reliability limits
+│   ├── DEMO_SCRIPT.md                 # 5-minute timed video recording script
+│   ├── LOCAL_SETUP.md                 # Detailed step-by-step local setup guide
+│   ├── PROJECT_STATUS.md              # Milestone status matrix & architecture
+│   ├── REQUIREMENT_TRACEABILITY.md    # Requirement to code traceability matrix
+│   └── TESTING.md                     # Test guide, 1,000-job load test, failure matrix
+├── .env.example                       # Documented environment variable template
+├── .gitignore                         # Excludes node_modules, dist, .env, logs
+├── docker-compose.yml                 # PostgreSQL 16, Redis 7, Elasticsearch 8.17
+├── package.json                       # Monorepo root workspace configuration
+├── tsconfig.base.json                 # Strict TypeScript configuration
+└── README.md                          # Master documentation
 ```
 
 ---
 
-## 4. Database Schema (Prisma)
+## 6. Prerequisites
 
-### Data Models Summary
+- **Node.js**: `v20.x` or `v24.x` (LTS recommended)
+- **npm**: `v10.x` or higher
+- **Docker & Docker Compose**: For local PostgreSQL, Redis, and Elasticsearch containers
+- **Git**
 
-1. **`User` (`users` table):**
-   - Represents email owners and account holders.
-   - Fields: `id` (UUID), `email` (unique), `displayName`, `providerId` (for future OAuth), `createdAt`, `updatedAt`.
-   - Relations: `emails`, `leads`, `batches`.
+---
 
-2. **`Email` (`emails` table):**
-   - Core entity for draft, scheduled, and delivered messages.
-   - Fields: `id` (UUID), `userId` (FK to User), `recipient` (varchar 320), `subject` (varchar 500), `body` (text), `status` (`DRAFT`, `SCHEDULED`, `PROCESSING`, `SENT`, `FAILED`, `CANCELLED`), `scheduledTime`, `sentAt`, `idempotencyKey`, `requestFingerprint` (SHA-256), `attemptCount`, `lastError`, `createdAt`, `updatedAt`.
-   - Constraints & Indexes:
-     - `@@unique([userId, idempotencyKey])`: Enforces idempotency key uniqueness per user.
-     - `@@index([userId, status])`: Fast lookup for user emails filtered by status.
-     - `@@index([status, scheduledTime])`: Optimized query for scheduler polling.
-     - `@@index([createdAt])`: Efficient reverse chronological pagination.
+## 7. Local Setup Instructions
 
-3. **`Lead` & `LeadBatch` (`leads`, `lead_batches` tables):**
-   - Supports imported recipient contacts and batch associations.
-   - Decoupled from immediate sending logic for clean campaign scaling.
-
-4. **`OutboxEvent` (`outbox_events` table):**
-   - Reliable transactional outbox pattern to bridge PostgreSQL state with background message queues (Redis / BullMQ).
-   - Fields: `id` (UUID), `eventType` (`EMAIL_SCHEDULED`), `aggregateId` (email ID), `payload` (JSONB), `status` (`PENDING`, `PROCESSED`, `FAILED`), `attemptCount`, `lastError`, `processedAt`, `createdAt`.
-   - Indexes:
-     - `@@index([status, createdAt])`: Efficient polling for pending events.
-
-### Prisma Migration Commands
-
-```powershell
-# Generate Prisma Client after schema changes
-npm run prisma:generate --workspace=@reachinbox/api
-
-# Apply migrations to configured database (Production / CI)
-npm run prisma:migrate --workspace=@reachinbox/api
-
-# Create a new migration during development
-npx prisma migrate dev --name <migration_name> --schema=apps/api/prisma/schema.prisma
+### 1. Clone & Install Dependencies
+```bash
+git clone <repo-url>
+cd Email-jobscheduler
+npm install
 ```
 
----
+### 2. Start Infrastructure Containers
+```bash
+docker compose up -d
+```
+Starts:
+- **PostgreSQL 16** (`localhost:5432`)
+- **Redis 7** with AOF (`localhost:6379`)
+- **Elasticsearch 8.17** (`localhost:9200`)
 
-## 5. Email API Specification (Milestone 2)
-
-All endpoints are mounted under `/api/emails`.
-
-### Ownership & Authentication Note
-> [!IMPORTANT]
-> Google OAuth 2.0 authentication is deferred to Milestone 4. In Milestone 2, requests are scoped to a deterministic development user (`00000000-0000-0000-0000-000000000001` / `dev@reachinbox.local`). Client-supplied user IDs in headers or request bodies are explicitly ignored to prevent insecure ownership spoofing.
-
----
-
-### `POST /api/emails` — Create Draft Email
-Creates a new email in `DRAFT` status.
-
-- **Headers:**
-  - `Content-Type: application/json`
-  - `Idempotency-Key: <optional-string>`
-- **Request Body:**
-  ```json
-  {
-    "recipient": "prospect@example.com",
-    "subject": "Follow-up regarding scheduled demo",
-    "body": "Hi there, following up on our discussion yesterday."
-  }
-  ```
-- **Validation Rules:**
-  - `recipient`: Required, valid email format, max 320 chars.
-  - `subject`: Required, non-empty, max 500 chars.
-  - `body`: Required, non-empty, max 50,000 chars.
-- **Success Response (New Record):** `HTTP 201 Created`
-  ```json
-  {
-    "id": "e83f510a-4299-4a94-811c-22363b9f33df",
-    "userId": "00000000-0000-0000-0000-000000000001",
-    "recipient": "prospect@example.com",
-    "subject": "Follow-up regarding scheduled demo",
-    "body": "Hi there, following up on our discussion yesterday.",
-    "status": "DRAFT",
-    "scheduledTime": null,
-    "sentAt": null,
-    "idempotencyKey": "key-demo-123",
-    "attemptCount": 0,
-    "lastError": null,
-    "createdAt": "2026-10-16T14:40:00.000Z",
-    "updatedAt": "2026-10-16T14:40:00.000Z"
-  }
-  ```
-- **Idempotency Replay (Identical Request + Same Key):** `HTTP 200 OK`
-  - Header: `Idempotent-Replay: true`
-  - Body: Returns the existing created record.
-- **Idempotency Conflict (Same Key + Different Request Body):** `HTTP 409 Conflict`
-  ```json
-  {
-    "error": {
-      "message": "Idempotency key 'key-demo-123' was already used with a different request payload.",
-      "status": 409
-    }
-  }
-  ```
-
----
-
-### `GET /api/emails` — List Paginated Emails
-Retrieves paginated email records for the current user, ordered newest first.
-
-- **Query Parameters:**
-  - `page` (optional integer, default `1`)
-  - `limit` (optional integer, default `10`, max `100`)
-  - `status` (optional enum: `DRAFT`, `SCHEDULED`, `PROCESSING`, `SENT`, `FAILED`, `CANCELLED`)
-- **Success Response:** `HTTP 200 OK`
-  ```json
-  {
-    "data": [
-      {
-        "id": "e83f510a-4299-4a94-811c-22363b9f33df",
-        "userId": "00000000-0000-0000-0000-000000000001",
-        "recipient": "prospect@example.com",
-        "subject": "Follow-up regarding scheduled demo",
-        "body": "Hi there...",
-        "status": "DRAFT",
-        "scheduledTime": null,
-        "sentAt": null,
-        "idempotencyKey": "key-demo-123",
-        "attemptCount": 0,
-        "lastError": null,
-        "createdAt": "2026-10-16T14:40:00.000Z",
-        "updatedAt": "2026-10-16T14:40:00.000Z"
-      }
-    ],
-    "pagination": {
-      "page": 1,
-      "limit": 10,
-      "total": 1,
-      "totalPages": 1
-    }
-  }
-  ```
-
----
-
-### `GET /api/emails/:id` — Get Email by ID
-- **Path Parameters:** `id` (must be a valid UUID)
-- **Success Response:** `HTTP 200 OK` (returns single `EmailDto`)
-- **Error Responses:**
-  - `400 Bad Request`: If `:id` is not a valid UUID format.
-  - `404 Not Found`: If email record does not exist.
-
----
-
-### `PATCH /api/emails/:id` — Update Draft Email
-Updates editable fields (`recipient`, `subject`, `body`) of a `DRAFT` email record.
-
-- **Path Parameters:** `id` (UUID)
-- **Request Body (At least one field required):**
-  ```json
-  {
-    "subject": "Updated Subject Title",
-    "body": "Updated body text."
-  }
-  ```
-- **Draft Status Guard:**
-  - If email status is **NOT** `DRAFT` (e.g. `SCHEDULED` or `SENT`): returns `HTTP 409 Conflict`.
-  - Clients cannot directly update internal fields like `status`, `sentAt`, `attemptCount`, or `lastError`.
-- **Success Response:** `HTTP 200 OK` (returns updated `EmailDto`)
-
----
-
-### `DELETE /api/emails/:id` — Delete Draft Email
-Deletes a draft email record.
-
-- **Path Parameters:** `id` (UUID)
-- **Draft Status Guard:**
-  - If email status is **NOT** `DRAFT`: returns `HTTP 409 Conflict` (`Only emails in 'DRAFT' status can be deleted`).
-  - Cannot delete scheduled, queued, or sent emails through this endpoint.
-- **Success Response:** `HTTP 204 No Content`
-
----
-
-## 6. Transactional Outbox Pattern
-
-The transactional outbox pattern prevents dual-write inconsistencies when scheduling emails. Instead of updating the database and attempting to publish to Redis in separate uncoordinated steps, the email and its corresponding `OutboxEvent` are written inside a single PostgreSQL ACID transaction:
-
-```typescript
-// Located in apps/api/src/services/outbox.service.ts
-export async function createScheduledEmailWithOutbox(input: ScheduleEmailOutboxInput) {
-  return prisma.$transaction(async (tx) => {
-    // 1. Create email in SCHEDULED state
-    const email = await tx.email.create({ ... });
-
-    // 2. Atomically create corresponding OutboxEvent row
-    const outboxEvent = await tx.outboxEvent.create({
-      data: {
-        eventType: 'EMAIL_SCHEDULED',
-        aggregateId: email.id,
-        payload: { emailId: email.id, recipient: email.recipient, scheduledTime: email.scheduledTime },
-        status: 'PENDING',
-      }
-    });
-
-    return { email, outboxEvent };
-  });
-}
+Check container health:
+```bash
+docker compose ps
 ```
 
-In Milestone 3, a dedicated background worker process will poll pending `OutboxEvent` records, reconcile them with Redis, and dispatch delayed jobs via BullMQ.
+### 3. Configure Environment Variables
+```bash
+cp .env.example .env
+```
+Default values in `.env.example` are pre-configured to work immediately for local development.
 
----
-
-## 7. Running the Application
-
-### Development Mode
-
-Run both the Express API and Vite React frontend concurrently:
-```powershell
-npm run dev
+### 4. Run Database Migrations
+```bash
+npm run prisma:migrate --workspace=apps/api
 ```
 
-Or run each service individually:
+### 5. Build Workspace Packages
+```bash
+npm run build
+```
 
-```powershell
-# Run backend API with tsx file-watcher
+### 6. Run the Application
+You can run all three services concurrently:
+```bash
+npm run dev:all
+```
+Or start them individually in separate terminals:
+```bash
+# Terminal 1: API (port 5000)
 npm run dev:api
 
-# Run Vite frontend dev server
+# Terminal 2: Worker
+npm run dev:worker
+
+# Terminal 3: Web Frontend (port 5173)
 npm run dev:web
 ```
 
-- **Frontend URL:** [http://localhost:5173](http://localhost:5173)
-- **API Base URL:** [http://localhost:5000](http://localhost:5000)
-- **Health Check URL:** [http://localhost:5000/health](http://localhost:5000/health)
-- **Email API Endpoint:** [http://localhost:5000/api/emails](http://localhost:5000/api/emails)
+---
+
+## 8. Service Endpoints & Access
+
+| Service | Local URL | Auth / Protection |
+|---|---|---|
+| **Web Frontend** | `http://localhost:5173` | Google OAuth / Dev User fallback |
+| **REST API** | `http://localhost:5000` | Session Cookie (`reachinbox.sid`) |
+| **API Health Probes** | `http://localhost:5000/health`, `/ready` | Public |
+| **Queue Dashboard** | `http://localhost:5000/admin/queues` | Localhost only (dev); `X-Admin-Token` (prod) |
+| **Elasticsearch Status**| `http://localhost:5000/api/search/status`| Public probe |
+| **Index Rebuild** | `http://localhost:5000/api/search/rebuild`| Localhost only (dev); `X-Admin-Token` (prod) |
 
 ---
 
-## 8. Distributed Rate Limiting & Pacing (Milestone 4)
+## 9. Environment Variable Reference
 
-ReachInbox implements cross-process rate limiting and send pacing using Redis Lua scripts:
-
-- **Hourly Rate Limiting:** Fixed-window counter with atomic `INCR` + `EXPIRE` (3600s TTL). If the limit is reached, the remaining window TTL is returned and the counter is decremented.
-- **Send Pacing:** Atomic `SET key 1 NX PX <intervalMs>` enforces a minimum delay between consecutive send attempts without sleeping or blocking worker threads. If blocked, the hourly reservation is rolled back.
-- **Safe Rescheduling:** Rate-limited jobs are moved to delayed state via `job.moveToDelayed(Date.now() + retryAfterMs)` and DB status is reverted to `SCHEDULED` without incrementing `attemptCount` or consuming BullMQ retry attempts.
-- **Fail-Safe Design:** If Redis is down, jobs fail transiently and back off safely without sending unregulated emails.
-
-### Environment Configuration
-
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `WORKER_CONCURRENCY` | `5` | Concurrent jobs per worker process |
-| `RATE_LIMIT_MAX_PER_HOUR` | `100` | Max emails per hour across all workers (0 = unlimited) |
-| `RATE_LIMIT_INTERVAL_MS` | `1000` | Minimum milliseconds between consecutive sends (0 = no pacing) |
-| `RATE_LIMIT_SCOPE` | `global` | `global` (shared) or `per-sender` (isolated by user ID) |
-| `RATE_LIMIT_KEY_PREFIX` | `rl:reachinbox` | Redis key prefix for coordination |
+| Variable | Default Value | Description |
+|---|---|---|
+| `PORT` | `5000` | Port for the Express API |
+| `NODE_ENV` | `development` | Runtime environment (`development`, `test`, `production`) |
+| `FRONTEND_URL` | `http://localhost:5173` | Allowed CORS origin and redirect target |
+| `DATABASE_URL` | `postgresql://reachinbox:reachinbox_secret@localhost:5432/reachinbox_db` | PostgreSQL connection string |
+| `REDIS_URL` | `redis://localhost:6379` | Redis broker connection string |
+| `WORKER_CONCURRENCY` | `5` | Concurrent jobs processed per worker process |
+| `RATE_LIMIT_MAX_PER_HOUR` | `100` | Maximum email sends allowed per hour (0 = unlimited) |
+| `RATE_LIMIT_INTERVAL_MS` | `1000` | Minimum delay in milliseconds between consecutive sends |
+| `RATE_LIMIT_SCOPE` | `global` | Scope of rate limiter: `global` or `per-sender` |
+| `SESSION_SECRET` | `dev-session-secret...` | Secret key for signing session cookies |
+| `GOOGLE_CLIENT_ID` | *(optional in dev)* | Google Cloud OAuth Client ID |
+| `GOOGLE_CLIENT_SECRET` | *(optional in dev)* | Google Cloud OAuth Client Secret |
+| `GOOGLE_REDIRECT_URI` | `http://localhost:5000/auth/google/callback` | OAuth redirect URI |
+| `SLACK_CLIENT_ID` | *(optional in dev)* | Slack App Client ID |
+| `SLACK_CLIENT_SECRET` | *(optional in dev)* | Slack App Client Secret |
+| `SLACK_REDIRECT_URI` | `http://localhost:5000/auth/slack/callback` | Slack OAuth redirect URI |
+| `ELASTICSEARCH_URL` | `http://localhost:9200` | Elasticsearch cluster endpoint |
+| `ELASTICSEARCH_INDEX` | `reachinbox_emails` | Name of the primary search index |
+| `ADMIN_TOKEN` | *(unset in dev)* | Secret required for admin endpoints in production |
+| `EMAIL_QUEUE_NAME` | `email-jobs` | BullMQ queue identifier |
 
 ---
 
-## 9. Available npm Scripts
+## 10. Automated Testing
 
-| Script | Purpose |
-| :--- | :--- |
-| `npm run dev` | Runs API (`5000`) and Web (`5173`) concurrently |
-| `npm run dev:api` | Runs API in watch mode via `tsx` |
-| `npm run dev:web` | Runs Vite frontend dev server |
-| `npm run dev:worker` | Runs worker in watch mode via `tsx` |
-| `npm run build` | Compiles `@reachinbox/shared`, `@reachinbox/api`, `@reachinbox/web`, and `@reachinbox/worker` |
-| `npm run build:shared`| Compiles shared TypeScript contract types |
-| `npm run build:api` | Generates Prisma Client & compiles Express backend TypeScript |
-| `npm run build:web` | Compiles React + Vite production bundle |
-| `npm run build:worker`| Compiles worker TypeScript |
-| `npm test` | Runs the full automated test suite (72 tests: 33 API + 39 Worker) |
-| `npm run lint` | Runs TypeScript compilation checks across the monorepo |
-| `npm run clean` | Removes `dist/` folders from all packages |
+The repository features comprehensive automated test coverage with **154 passing tests** across 14 test suites.
 
+```bash
+# Run all workspace test suites
+npm test
+
+# Run API workspace tests (82 tests)
+npm run test:api
+
+# Run Worker workspace tests (72 tests)
+npm run test:worker
+```
+
+### 1,000 Synthetic Jobs Load Test
+Execute the dedicated high-concurrency load test:
+```bash
+npm test --workspace=@reachinbox/worker -t "1,000 Synthetic Jobs"
+```
+Measures throughput, concurrency safety, observable failure handling on 550 recipient bounces, and verified mid-stream worker crash recovery with **zero duplicates**.
+
+---
+
+## 11. Example API Usage
+
+### Create an Email Draft (with Idempotency-Key)
+```bash
+curl -X POST http://localhost:5000/api/emails \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: draft-uuid-001" \
+  -d '{
+    "recipient": "lead@company.test",
+    "subject": "Acme Alpha Invitation",
+    "body": "Welcome aboard! Here is your private activation code."
+  }'
+```
+
+### Schedule Email Delivery
+```bash
+curl -X POST http://localhost:5000/api/schedule \
+  -H "Content-Type: application/json" \
+  -d '{
+    "emailId": "<email-id>",
+    "scheduledTime": "2026-10-18T10:00:00.000Z"
+  }'
+```
+
+### Full-Text Search Across Emails
+```bash
+curl "http://localhost:5000/api/search/emails?q=Acme&status=SENT&page=1&limit=20"
+```
+
+### Cancel a Scheduled Email
+```bash
+curl -X POST http://localhost:5000/api/cancel \
+  -H "Content-Type: application/json" \
+  -d '{ "emailId": "<email-id>" }'
+```
+
+---
+
+## 12. Troubleshooting Guide
+
+| Issue | Cause | Solution |
+|---|---|---|
+| **Elasticsearch container fails to start** | Insufficient Docker memory allocation | Increase Docker Desktop memory to ≥ 2 GB. |
+| **Search returns PostgreSQL fallback** | Elasticsearch container is initializing or down | Normal behavior. Search transparently queries PostgreSQL with identical filters. |
+| **Dashboard returns 403 Forbidden** | Accessing `/admin/queues` from a non-localhost IP in development | Access via `http://localhost:5000` or `http://127.0.0.1:5000`. In production, supply `X-Admin-Token`. |
+| **Worker logs `Rate limited: Deferring job`** | Pacing interval or hourly quota reached | Expected behavior. Worker uses BullMQ `DelayedError` to sleep without failing the job. |
+| **Prisma Client missing fields** | Schema changed without re-generating client | Run `npm run prisma:generate --workspace=@reachinbox/api`. |
+
+---
+
+## 13. Architecture Decisions & Reliability Guarantees
+
+### What Is Guaranteed
+1. **At-Least-Once Delivery**: No scheduled job is permanently dropped due to network partitions or process restarts.
+2. **Transactional State Transitions**: Email states (`DRAFT` → `SCHEDULED` → `PROCESSING` → `SENT` / `FAILED`) are conditional and guarded by processing ownership and lease expiration.
+3. **Multi-User Data Isolation**: Every read, write, and search operation is scoped to `userId` on the server.
+4. **Idempotency Protection**: Duplicate requests with matching `Idempotency-Key` return cached results with `Idempotent-Replay: true`.
+
+### What Is Best-Effort
+1. **Exactly-Once Delivery**: SMTP protocol specifications do not support distributed transactional commit protocols. In the rare event of a TCP disconnection after SMTP acceptance but before local database persistence, our localized retry and quarantine logic prevents blind resends.
+2. **Elasticsearch Indexing**: Elasticsearch is treated as a read-side search index. If indexing fails, PostgreSQL remains authoritative, and search queries gracefully fall back to database text filters.
+
+---
+
+## 14. License
+
+UNLICENSED — Built for ReachInbox Technical Assessment.

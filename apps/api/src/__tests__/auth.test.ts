@@ -204,6 +204,18 @@ describe('Milestone 6: Google OAuth & Multi-User Isolation', () => {
       delete process.env.ALLOW_DEV_LOGIN;
       delete process.env.COOKIE_SAMESITE;
       delete process.env.TRUST_PROXY;
+      delete process.env.RENDER;
+    });
+
+    it('defaults to SameSite=None; Secure and trusts the proxy on Render', async () => {
+      process.env.ALLOW_DEV_LOGIN = 'true';
+      process.env.RENDER = 'true';
+      const hosted = createApp();
+      const res = await request(hosted).get('/auth/dev-login').set('X-Forwarded-Proto', 'https');
+      const cookie = String(res.headers['set-cookie']?.[0] ?? '');
+      expect(cookie).toContain('reachinbox.sid=');
+      expect(cookie).toMatch(/SameSite=None/i);
+      expect(cookie).toMatch(/Secure/i);
     });
 
     it('issues a SameSite=None; Secure session cookie behind an https proxy', async () => {

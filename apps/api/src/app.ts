@@ -18,16 +18,23 @@ export function createApp(): Application {
 
   // Behind a hosting proxy (Render, Railway, Heroku, nginx) the real client IP
   // and https scheme come from X-Forwarded-*. Needed for secure cookies.
-  // TRUST_PROXY=1 trusts one proxy hop; it is on by default in production.
-  const trustProxy = process.env.TRUST_PROXY ?? (config.NODE_ENV === 'production' ? '1' : '');
+  // TRUST_PROXY=1 trusts one proxy hop; it is on by default in production and
+  // on Render (which sets RENDER=true on every service).
+  const onRender = process.env.RENDER === 'true';
+  const trustProxy =
+    process.env.TRUST_PROXY ?? (config.NODE_ENV === 'production' || onRender ? '1' : '');
   if (trustProxy) {
     app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
   }
 
   // When the dashboard and API are on different sites (for example two
   // *.onrender.com services), browsers only send the session cookie on API
-  // calls if it is SameSite=None; Secure. Set COOKIE_SAMESITE=none for that.
-  const sameSite = (process.env.COOKIE_SAMESITE || 'lax').toLowerCase() as 'lax' | 'strict' | 'none';
+  // calls if it is SameSite=None; Secure. Set COOKIE_SAMESITE=none for that;
+  // it is the default on Render, where onrender.com subdomains are separate sites.
+  const sameSite = (process.env.COOKIE_SAMESITE || (onRender ? 'none' : 'lax')).toLowerCase() as
+    | 'lax'
+    | 'strict'
+    | 'none';
   const secureCookie = config.NODE_ENV === 'production' || sameSite === 'none';
 
   // Baseline browser security headers for API and OAuth responses.

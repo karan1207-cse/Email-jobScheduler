@@ -14,6 +14,33 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 export function createApp(): Application {
   const app = express();
+  app.disable('x-powered-by');
+
+  // Behind a hosting proxy (Render, Railway, Heroku, nginx) the real client IP
+  // and https scheme come from X-Forwarded-*. Needed for secure cookies.
+  // TRUST_PROXY=1 trusts one proxy hop; it is on by default in production.
+  const trustProxy = process.env.TRUST_PROXY ?? (config.NODE_ENV === 'production' ? '1' : '');
+  if (trustProxy) {
+    app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
+  }
+
+  // When the dashboard and API are on different sites (for example two
+  // *.onrender.com services), browsers only send the session cookie on API
+  // calls if it is SameSite=None; Secure. Set COOKIE_SAMESITE=none for that.
+  const sameSite = (process.env.COOKIE_SAMESITE || 'lax').toLowerCase() as 'lax' | 'strict' | 'none';
+  const secureCookie = config.NODE_ENV === 'production' || sameSite === 'none';
+
+  // Baseline browser security headers for API and OAuth responses.
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    if (config.NODE_ENV === 'production') {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+    next();
+  });
 
   // CORS configuration — must come before session so the preflight OPTIONS
   // is handled before any cookie processing
@@ -37,14 +64,14 @@ export function createApp(): Application {
       saveUninitialized: false,
       cookie: {
         httpOnly: true,
-        sameSite: 'lax',
-        secure: config.NODE_ENV === 'production',
+        sameSite,
+        secure: secureCookie,
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       },
     })
   );
 
-  app.use(express.json());
+  app.use(express.json({ limit: '12mb' }));
 
   // Mount routers
   app.use(rootRouter);

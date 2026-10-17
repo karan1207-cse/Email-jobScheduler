@@ -7,6 +7,13 @@ COPY apps/web/package.json apps/web/package.json
 COPY packages/shared/package.json packages/shared/package.json
 RUN npm ci
 COPY . .
-RUN npm run build:shared && npm run build:worker
+# The worker imports PrismaClient to persist job status. Generate the client
+# from the API schema in this image as well as in the API image.
+RUN npm run prisma:generate --workspace=@reachinbox/api \
+    && mkdir -p apps/worker/node_modules/.prisma/client \
+    && cp -a apps/api/node_modules/@prisma/client/. apps/worker/node_modules/@prisma/client/ \
+    && cp -a apps/api/node_modules/.prisma/client/. apps/worker/node_modules/.prisma/client/ \
+    && npm run build:shared \
+    && npm run build:worker
 ENV NODE_ENV=development
 CMD ["npm", "run", "start", "--workspace=@reachinbox/worker"]

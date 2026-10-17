@@ -79,7 +79,7 @@ export const workerConfig = {
   /** Minimum interval between consecutive sends, in milliseconds. 0 = no pacing. */
   RATE_LIMIT_INTERVAL_MS: positiveInt('RATE_LIMIT_INTERVAL_MS', 1000),
   /** Scope of the rate limit: 'global' (shared across all senders) or 'per-sender'. */
-  RATE_LIMIT_SCOPE: parseRateLimitScope(optional('RATE_LIMIT_SCOPE', 'global')),
+  RATE_LIMIT_SCOPE: parseRateLimitScope(optional('RATE_LIMIT_SCOPE', 'per-sender')),
   /** Redis key prefix for rate-limit counters. Prevents collisions with other apps. */
   RATE_LIMIT_KEY_PREFIX: optional('RATE_LIMIT_KEY_PREFIX', 'rl:reachinbox'),
 } as const;

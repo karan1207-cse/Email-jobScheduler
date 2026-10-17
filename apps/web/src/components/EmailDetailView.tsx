@@ -17,6 +17,24 @@ export const EmailDetailView: React.FC<EmailDetailViewProps> = ({
 }) => {
   const [isStarred, setIsStarred] = useState<boolean>(false);
   const [actionInProgress, setActionInProgress] = useState<boolean>(false);
+  const statusLabels: Record<string, string> = {
+    DRAFT: 'Draft',
+    SCHEDULED: 'Scheduled',
+    PROCESSING: 'Processing',
+    SENT: 'Sent',
+    FAILED: 'Failed',
+    CANCELLED: 'Cancelled',
+  };
+  const messageText = email.body
+    .replace(/<br\s*\/?\s*>/gi, '\n')
+    .replace(/<\/(p|div|li)\s*>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
 
   const getSenderInitial = (str: string) => {
     return str ? str.charAt(0).toUpperCase() : 'A';
@@ -86,6 +104,9 @@ export const EmailDetailView: React.FC<EmailDetailViewProps> = ({
           <h2 className="detail-subject-title">
             {email.subject} <span className="detail-ref-id">| {email.id.slice(0, 14).toUpperCase()}</span>
           </h2>
+          <span className={`badge-status-pill status-${email.status.toLowerCase()}`}>
+            {statusLabels[email.status] ?? email.status}
+          </span>
         </div>
 
         <div className="detail-top-actions">
@@ -153,53 +174,42 @@ export const EmailDetailView: React.FC<EmailDetailViewProps> = ({
 
         {/* Email Body */}
         <div className="figma-detail-body">
-          <p className="body-salutation">Hey {currentUser.displayName || 'Oliver'},</p>
-          <p className="body-lead">You've just received a scheduled delivery update.</p>
-
-          {/* Styled Callout Box (from Figma) */}
-          <div className="figma-exclusive-callout">
-            <div className="callout-lightning">⚡</div>
-            <div className="callout-text">
-              <strong>Extremely Exclusive — High-Performance Delivery Engine</strong>
-              <span>
-                To explore your active scheduled queues, monitor outbox pipelines, or adjust dispatch pacing, review your delivery status below.
-              </span>
-            </div>
-          </div>
-
-          {/* Render actual body content */}
           <div className="body-main-text">
-            {email.body.split('\n').map((line, idx) => (
+            {messageText.split('\n').map((line, idx) => (
               <p key={idx}>{line || '\u00A0'}</p>
             ))}
           </div>
-
-          <p className="body-signoff">
-            Best regards,<br />
-            <strong>ReachInbox Delivery Engine</strong>
-          </p>
-
-          <p className="body-ps">
-            <em>P.S. Always remember that you can develop world class email scheduling with atomic leases! 🚀</em>
-          </p>
         </div>
 
-        {/* Attachments Section (matching Figma Image 2 Right) */}
-        <div className="figma-attachments-section">
-          <div className="attachment-card">
-            <div className="attachment-thumb">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00A859" strokeWidth="2">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <polyline points="21 15 16 10 5 21" />
-              </svg>
-            </div>
-            <div className="attachment-info">
-              <span className="attachment-name">Performance_Report.png</span>
-              <span className="attachment-size">1.2 MB</span>
-            </div>
+        {(email.previewUrl || email.lastError) && (
+          <div className="delivery-details" aria-label="Delivery details">
+            {email.previewUrl && (
+              <a className="ethereal-preview-link" href={email.previewUrl} target="_blank" rel="noopener noreferrer">
+                Open sent message in Ethereal ↗
+              </a>
+            )}
+            {email.messageId && <span className="delivery-message-id">Message-ID: {email.messageId}</span>}
+            {email.lastError && <span className="delivery-error">{email.lastError}</span>}
           </div>
-        </div>
+        )}
+
+        {email.attachments && email.attachments.length > 0 && (
+          <div className="figma-attachments-section" aria-label="Email attachments">
+            {email.attachments.map((attachment, index) => (
+              <div className="attachment-card" key={`${attachment.filename}-${index}`}>
+                <div className="attachment-thumb" aria-hidden="true">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00A859" strokeWidth="2">
+                    <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                </div>
+                <div className="attachment-info">
+                  <span className="attachment-name">{attachment.filename}</span>
+                  <span className="attachment-size">{(attachment.size / 1024).toFixed(0)} KB · {attachment.contentType}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

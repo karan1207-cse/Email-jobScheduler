@@ -20,6 +20,8 @@ function mapToDto(email: Email): EmailDto {
     status: email.status as EmailDto['status'],
     scheduledTime: email.scheduledTime ? email.scheduledTime.toISOString() : null,
     sentAt: email.sentAt ? email.sentAt.toISOString() : null,
+    messageId: email.messageId ?? null,
+    previewUrl: email.previewUrl ?? null,
     idempotencyKey: email.idempotencyKey,
     attemptCount: email.attemptCount,
     lastError: email.lastError,
@@ -110,7 +112,7 @@ export async function scheduleEmail(
     },
     {
       delay: delayMs,
-      jobId: `email:${email.id}`, // Idempotent job ID prevents double-scheduling
+      jobId: `email-${email.id}`, // BullMQ custom IDs cannot contain ':'
     }
   );
 
@@ -157,7 +159,7 @@ export async function cancelScheduledEmail(
   // Remove job from BullMQ (best-effort — job may have already been picked up)
   try {
     const queue = getEmailQueue();
-    const job = await queue.getJob(`email:${emailId}`);
+    const job = await queue.getJob(`email-${emailId}`);
     if (job) {
       await job.remove();
       console.log(`[Scheduler] Removed BullMQ job for email ${emailId}.`);
@@ -259,7 +261,7 @@ export async function recoverPendingOutboxEvents(): Promise<void> {
       const delayMs = Math.max(0, scheduledAt.getTime() - now.getTime());
 
       // Check if job already exists in BullMQ
-      const existingJob = await queue.getJob(`email:${payload.emailId}`);
+      const existingJob = await queue.getJob(`email-${payload.emailId}`);
       if (existingJob) {
         console.log(`[OutboxRecovery] Job already exists for email ${payload.emailId}, skipping.`);
       } else {
@@ -274,7 +276,7 @@ export async function recoverPendingOutboxEvents(): Promise<void> {
           },
           {
             delay: delayMs,
-            jobId: `email:${payload.emailId}`,
+            jobId: `email-${payload.emailId}`,
           }
         );
         console.log(
@@ -304,4 +306,66 @@ export async function recoverPendingOutboxEvents(): Promise<void> {
   }
 
   console.log('[OutboxRecovery] Recovery complete.');
+}
+
+/**
+ * Startup reconciliation: every SCHEDULED email must have a live BullMQ job.
+ *
+ * Covers the cases outbox recovery cannot see: Redis lost its data (no AOF, a
+ * flushed instance), or a job exhausted its retries before the worker could
+ * claim the email (for example the database was down), leaving the row
+ * SCHEDULED with a failed job. The deterministic jobId means this can never
+ * create a second job for an email that already has one.
+ */
+export async function reconcileScheduledEmails(batchSize = 500): Promise<{ requeued: number; retried: number }> {
+  const prisma = getPrismaClient();
+  const queue = getEmailQueue();
+  let requeued = 0;
+  let retried = 0;
+  let cursor: string | undefined;
+
+  for (;;) {
+    const emails = await prisma.email.findMany({
+      where: { status: 'SCHEDULED' },
+      orderBy: { id: 'asc' },
+      take: batchSize,
+      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+    });
+    if (emails.length === 0) break;
+    cursor = emails[emails.length - 1]!.id;
+
+    for (const email of emails) {
+      const jobId = `email-${email.id}`;
+      try {
+        const job = await queue.getJob(jobId);
+        if (job) {
+          if ((await job.getState()) === 'failed') {
+            await job.retry('failed');
+            retried++;
+          }
+          continue;
+        }
+        const scheduledAt = email.scheduledTime ?? new Date();
+        await queue.add(
+          EMAIL_JOB_NAME,
+          {
+            emailId: email.id,
+            recipient: email.recipient,
+            subject: email.subject,
+            body: email.body,
+            scheduledTime: scheduledAt.toISOString(),
+          },
+          { delay: Math.max(0, scheduledAt.getTime() - Date.now()), jobId }
+        );
+        requeued++;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[Reconcile] Could not reconcile email ${email.id}: ${msg}`);
+      }
+    }
+    if (emails.length < batchSize) break;
+  }
+
+  console.log(`[Reconcile] SCHEDULED emails checked: ${requeued} re-enqueued, ${retried} failed jobs retried.`);
+  return { requeued, retried };
 }

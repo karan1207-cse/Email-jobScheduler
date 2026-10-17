@@ -5,24 +5,12 @@ import {
   getEmailById,
   updateDraftEmail,
   deleteDraftEmail,
-  DEV_DEFAULT_USER,
 } from '../services/email.service.js';
 import type { CreateEmailDto, UpdateEmailDto, ListEmailsQuery } from '../validations/email.schema.js';
 import { getCurrentUser } from '../middleware/auth.js';
 
-/**
- * Resolves the current userId from the authenticated session.
- * Falls back to the development default user when OAuth is not configured
- * (GOOGLE_CLIENT_ID not set) so existing tests and development workflows
- * continue to function without credentials.
- */
 function resolveUserId(req: Request): string {
-  try {
-    return getCurrentUser(req).userId;
-  } catch {
-    // No active session — use the dev default user
-    return DEV_DEFAULT_USER.id;
-  }
+  return getCurrentUser(req).userId;
 }
 
 export async function createEmailHandler(

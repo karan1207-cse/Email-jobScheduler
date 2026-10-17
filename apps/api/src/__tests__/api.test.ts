@@ -29,6 +29,10 @@ describe('ReachInbox API Endpoints', () => {
       expect(res.body).toHaveProperty('status', 'online');
       expect(res.body).toHaveProperty('description');
       expect(res.body).toHaveProperty('timestamp');
+      expect(res.headers['x-powered-by']).toBeUndefined();
+      expect(res.headers['x-content-type-options']).toBe('nosniff');
+      expect(res.headers['x-frame-options']).toBe('DENY');
+      expect(res.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
     });
   });
 
@@ -109,6 +113,18 @@ describe('ReachInbox API Endpoints', () => {
       expect(res.body.status).toBe('unhealthy');
       expect(res.body.services.database.status).toBe('down');
       expect(res.body.services.redis.status).toBe('down');
+    });
+  });
+
+  describe('GET /ready', () => {
+    it('should expose the same dependency readiness check', async () => {
+      vi.spyOn(dbModule, 'checkDatabaseHealth').mockResolvedValue({ status: 'up', latencyMs: 1 });
+      vi.spyOn(redisModule, 'checkRedisHealth').mockResolvedValue({ status: 'up', latencyMs: 1 });
+      const res = await request(app).get('/ready');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('healthy');
+      expect(res.body.services.database.status).toBe('up');
+      expect(res.body.services.redis.status).toBe('up');
     });
   });
 

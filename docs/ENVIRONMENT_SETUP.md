@@ -21,7 +21,7 @@ This document provides a comprehensive reference for all configuration variables
 | `WORKER_CONCURRENCY`| Worker | Optional | `5` | Maximum number of concurrent jobs processed by a single worker instance. |
 | `RATE_LIMIT_MAX_PER_HOUR` | Worker | Optional | `100` | Hourly transmission limit. Set to `0` for unlimited. |
 | `RATE_LIMIT_INTERVAL_MS` | Worker | Optional | `1000` | Minimum spacing interval (in ms) between consecutive email dispatches. |
-| `RATE_LIMIT_SCOPE` | Worker | Optional | `global` | Scope for rate limit enforcement: `global` (shared cluster limit) or `per-sender` (tenant/user isolated). |
+| `RATE_LIMIT_SCOPE` | Worker | Optional | `per-sender` | Scope for rate limit enforcement: `global` (shared cluster limit) or `per-sender` (tenant/user isolated). |
 | `RATE_LIMIT_KEY_PREFIX` | Worker | Optional | `rl:reachinbox` | Key namespace prefix for Redis rate-limiting keys and locks. |
 | `EMAIL_QUEUE_NAME` | API, Worker | Optional | `email-jobs` | BullMQ queue identifier shared between API producers and worker consumers. |
 | `SESSION_SECRET` | API | Required in Prod | `dev-session-secret-change-in-production` | Secret used to sign session cookies for Google and Slack state validation. |

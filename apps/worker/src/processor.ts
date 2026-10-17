@@ -106,6 +106,8 @@ export async function persistSentStateWithRetry(
           status: 'SENT',
           sentAt: new Date(),
           lastError: null,
+          messageId: result.messageId?.slice(0, 255) ?? null,
+          previewUrl: result.previewUrl,
         },
       });
 
@@ -273,6 +275,25 @@ async function handleSmtpFailure(
 }
 
 /**
+ * Looks up the user who owns the email; their address is the sender identity.
+ * Best effort: a lookup failure falls back to SMTP_FROM rather than failing the send.
+ */
+async function loadSender(
+  prisma: ReturnType<typeof getPrisma>,
+  userId: string
+): Promise<{ email: string; name: string | null } | null> {
+  try {
+    const user = await prisma.user?.findUnique?.({
+      where: { id: userId },
+      select: { email: true, displayName: true },
+    });
+    return user ? { email: user.email, name: user.displayName } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Lease duration (in ms) during which an email in PROCESSING is considered owned
  * by an active worker. Default: 60 seconds.
  */
@@ -311,6 +332,7 @@ export async function processEmailJob(job: Job<EmailJobData>, token?: string): P
     attemptCount: number;
     lastError: string | null;
     updatedAt: Date;
+    attachments: unknown;
   } | null = null;
 
   if (claimResult.count === 0) {
@@ -420,13 +442,17 @@ export async function processEmailJob(job: Job<EmailJobData>, token?: string): P
           },
         });
 
-        // Move job to delayed state — does NOT consume a BullMQ retry attempt
-        await job.moveToDelayed(Date.now() + result.retryAfterMs, lockToken);
+        // Move job to delayed state — does NOT consume a BullMQ retry attempt.
+        // Hourly deferrals share one absolute target (the next window start) so
+        // BullMQ releases them in the order they were deferred.
+        await job.moveToDelayed(result.retryAt ?? Date.now() + result.retryAfterMs, lockToken);
 
-        // Dispatch Slack alert asynchronously with Redis deduplication
-        if (limiter.redis) {
+        // Notify the sender's Slack the moment their hourly limit is hit
+        // (not for routine pacing waits). Async and deduplicated per hour window.
+        if (limiter.redis && result.limitType !== 'pacing') {
           dispatchRateLimitAlert(limiter.redis, {
-            scope: email.userId || 'global',
+            userId: email.userId,
+            scope: limiter.scopeFor?.(email.userId) ?? email.userId,
             hourlyLimit: limiter.maxPerHour,
             retryAfterMs: result.retryAfterMs,
             reason: result.reason,
@@ -472,22 +498,35 @@ export async function processEmailJob(job: Job<EmailJobData>, token?: string): P
     return;
   }
 
-  // 5. Build HTML body
+  // 5. Build HTML body. Escape user-provided values before inserting them into HTML.
+  const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character] ?? character);
   const htmlBody = `<div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-      <h2 style="color: #4F46E5;">${subject}</h2>
-      <div style="color: #374151; line-height: 1.6;">${body.replace(/\n/g, '<br/>')}</div>
+      <h2 style="color: #4F46E5;">${escapeHtml(subject)}</h2>
+      <div style="color: #374151; line-height: 1.6;">${escapeHtml(body).replace(/\n/g, '<br/>')}</div>
       <hr style="border: none; border-top: 1px solid #E5E7EB; margin: 24px 0;" />
       <p style="color: #9CA3AF; font-size: 12px;">Sent via ReachInbox Email Scheduler</p>
     </div>`;
 
   // 6. Send via SMTP (Ethereal in dev, configured SMTP in prod)
+  const sender = await loadSender(prisma, email.userId);
   let sendResult: SendResult;
   try {
     sendResult = await sendEmail({
       to: recipient,
+      sender: sender ?? undefined,
       subject,
       html: htmlBody,
       text: body,
+      attachments: Array.isArray(email.attachments)
+        ? email.attachments.flatMap((value) => {
+          if (typeof value !== 'object' || value === null) return [];
+          const attachment = value as { filename?: unknown; contentType?: unknown; contentBase64?: unknown };
+          if (typeof attachment.filename !== 'string' || typeof attachment.contentType !== 'string' || typeof attachment.contentBase64 !== 'string') return [];
+          return [{ filename: attachment.filename, contentType: attachment.contentType, contentBase64: attachment.contentBase64 }];
+        })
+        : [],
     });
   } catch (smtpErr: unknown) {
     await handleSmtpFailure(prisma, emailId, recipient, job, smtpErr);

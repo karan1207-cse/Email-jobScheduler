@@ -8,6 +8,7 @@ import { Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import { workerConfig } from './config.js';
 import { closePrisma } from './prisma.js';
+import { setMailerAccountCache } from './mailer.js';
 import {
   processEmailJob,
   initRateLimiter,
@@ -15,7 +16,7 @@ import {
   type EmailJobData,
 } from './processor.js';
 
-const EMAIL_QUEUE_NAME = 'email-jobs';
+const EMAIL_QUEUE_NAME = process.env.EMAIL_QUEUE_NAME || 'email-jobs';
 const EMAIL_JOB_NAME = 'send-email';
 
 let worker: Worker<EmailJobData> | null = null;
@@ -52,6 +53,7 @@ async function startWorker(): Promise<void> {
   // Initialise the distributed rate limiter with a dedicated connection
   rateLimitRedisConnection = createRedisConnection();
   initRateLimiter(rateLimitRedisConnection);
+  setMailerAccountCache(rateLimitRedisConnection);
   console.log('[Worker] ✅ Distributed rate limiter initialised.');
 
   worker = new Worker<EmailJobData>(

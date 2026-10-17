@@ -116,11 +116,26 @@ export async function searchEmailsApi(
   });
 
   if (!response.ok) {
-    // If Elasticsearch route is unavailable, fallback to listEmails
-    return listEmails(page, limit, status);
+    const errBody = await response.json().catch(() => null);
+    throw new Error(errBody?.error?.message || `Search failed (HTTP ${response.status})`);
   }
 
-  return response.json() as Promise<PaginatedResponse<EmailDto>>;
+  const result = await response.json() as {
+    data: EmailDto[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  };
+  return {
+    data: result.data,
+    pagination: {
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+      totalPages: result.totalPages,
+    },
+  };
 }
 
 
@@ -173,6 +188,7 @@ export interface CreateDraftPayload {
   recipient: string;
   subject: string;
   body: string;
+  attachments?: Array<{ filename: string; contentType: string; size: number; contentBase64: string }>;
 }
 
 export async function createDraftEmail(

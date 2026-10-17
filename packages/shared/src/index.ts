@@ -45,9 +45,14 @@ export interface EmailDto {
   recipient: string;
   subject: string;
   body: string;
+  attachments?: EmailAttachmentMetadata[];
   status: EmailStatus;
   scheduledTime?: string | null;
   sentAt?: string | null;
+  /** SMTP Message-ID returned when the email was accepted. */
+  messageId?: string | null;
+  /** Ethereal preview link for the sent message (null for real SMTP relays). */
+  previewUrl?: string | null;
   idempotencyKey?: string | null;
   attemptCount: number;
   lastError?: string | null;
@@ -55,10 +60,21 @@ export interface EmailDto {
   updatedAt: string;
 }
 
+export interface EmailAttachmentMetadata {
+  filename: string;
+  contentType: string;
+  size: number;
+}
+
+export interface EmailAttachmentInput extends EmailAttachmentMetadata {
+  contentBase64: string;
+}
+
 export interface CreateEmailInput {
   recipient: string;
   subject: string;
   body: string;
+  attachments?: EmailAttachmentInput[];
 }
 
 export interface UpdateEmailInput {

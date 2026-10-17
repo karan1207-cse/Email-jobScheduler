@@ -22,6 +22,7 @@ vi.mock('bullmq', () => {
 });
 
 import { getPrismaClient } from '../db/prisma.js';
+import { Queue } from 'bullmq';
 import { scheduleEmail, cancelScheduledEmail, recoverPendingOutboxEvents } from '../services/scheduler.service.js';
 
 // ── Mock Prisma builder ──────────────────────────────────────────────────────
@@ -125,6 +126,11 @@ describe('Scheduler Service — scheduleEmail', () => {
 
     expect(result.status).toBe('SCHEDULED');
     expect(result.id).toBe('email-uuid-1');
+    expect(vi.mocked(Queue).mock.results[0]?.value.add).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Object),
+      expect.objectContaining({ jobId: 'email-email-uuid-1' })
+    );
     expect(tx.email.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'email-uuid-1' } })
     );

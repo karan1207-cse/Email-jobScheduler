@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { AuthUser } from '../api.js';
+import { API_BASE_URL, type AuthUser } from '../api.js';
 
 export type DashboardTab = 'scheduled' | 'sent' | 'slack' | 'health';
 
@@ -59,8 +59,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
           </div>
           <div className="figma-user-info">
-            <span className="figma-user-name">{user.displayName || 'Oliver Brown'}</span>
-            <span className="figma-user-email">{user.email || 'oliver.brown@domain.io'}</span>
+            <span className="figma-user-name">{user.displayName || user.email}</span>
+            <span className="figma-user-email">{user.email}</span>
           </div>
           <svg
             className={`figma-chevron ${dropdownOpen ? 'open' : ''}`}
@@ -83,7 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <div className="dropdown-divider"></div>
             <a
-              href="/admin/queues"
+              href={new URL('/admin/queues', API_BASE_URL).href}
               target="_blank"
               rel="noreferrer"
               className="dropdown-item"

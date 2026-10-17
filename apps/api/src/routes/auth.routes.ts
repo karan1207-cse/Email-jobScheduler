@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 import { getAuthorizationUrl, exchangeCodeForUser } from '../auth/google.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { config } from '../config.js';
+import { DEV_DEFAULT_USER, ensureDevUser } from '../services/email.service.js';
 
 export const authRouter = Router();
 
@@ -27,6 +28,12 @@ export const authRouter = Router();
  */
 authRouter.get('/auth/google', (req: Request, res: Response): void => {
   if (!config.GOOGLE_CLIENT_ID || !config.GOOGLE_CLIENT_SECRET) {
+    // Local machine without Google keys: the "Sign in with Google" button falls
+    // back to the local dev sign-in when that is switched on.
+    if (process.env.ALLOW_DEV_LOGIN === 'true' && config.NODE_ENV !== 'production') {
+      res.redirect('/auth/dev-login');
+      return;
+    }
     res.status(503).json({
       error: {
         message: 'Google OAuth is not configured on this server. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.',
@@ -121,65 +128,35 @@ authRouter.get('/auth/google/callback', async (req: Request, res: Response): Pro
 
 /**
  * POST /auth/login
- * Email + password / demo login matching Figma login screen.
- * Upserts user if needed and establishes authenticated session.
+ * Email/password sign-in is not implemented. Do not create a session without
+ * verifying a password; Google OAuth is the supported sign-in flow.
  */
-authRouter.post('/auth/login', async (req: Request, res: Response): Promise<void> => {
-  const { email } = req.body as { email?: string; password?: string };
-  if (!email || typeof email !== 'string' || !email.trim()) {
-    res.status(400).json({
-      error: { message: 'Email ID is required.', status: 400 },
-    });
+authRouter.post('/auth/login', async (_req: Request, res: Response): Promise<void> => {
+  res.status(501).json({
+    error: { message: 'Email and password sign-in is not configured. Please sign in with Google.', status: 501 },
+  });
+});
+
+/**
+ * GET /auth/dev-login
+ * Local development only: signs in as the built-in dev user so the dashboard can
+ * be used on a machine without Google OAuth keys. Disabled unless
+ * ALLOW_DEV_LOGIN=true, never in production, and only from localhost.
+ */
+authRouter.get('/auth/dev-login', async (req: Request, res: Response): Promise<void> => {
+  const ip = (req.ip ?? '').replace('::ffff:', '');
+  const isLoopback = ip === '::1' || ip.startsWith('127.');
+  if (process.env.ALLOW_DEV_LOGIN !== 'true' || config.NODE_ENV === 'production' || !isLoopback) {
+    res.status(404).json({ error: { message: 'Not found', status: 404 } });
     return;
   }
-
-  const cleanEmail = email.trim().toLowerCase();
-  const prisma = getPrismaClient();
-
-  try {
-    let dbUser = await prisma.user.findUnique({ where: { email: cleanEmail } });
-    if (!dbUser) {
-      const namePart = cleanEmail.split('@')[0] || 'User';
-      const formattedName = namePart
-        .split(/[._-]/)
-        .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-        .join(' ');
-
-      dbUser = await prisma.user.create({
-        data: {
-          email: cleanEmail,
-          displayName: formattedName,
-        },
-      });
-    }
-
-    if (!req.session) {
-      (req as unknown as { session: Record<string, unknown> }).session = {};
-    }
-    req.session.user = {
-      userId: dbUser.id,
-      email: dbUser.email,
-      displayName: dbUser.displayName ?? dbUser.email,
-      picture: undefined,
-    };
-
-    console.log(`[Auth] User logged in via credentials: ${dbUser.email} (id=${dbUser.id})`);
-    res.json({
-      success: true,
-      user: {
-        id: dbUser.id,
-        email: dbUser.email,
-        displayName: dbUser.displayName,
-        picture: null,
-      },
-    });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[Auth] Login error: ${msg}`);
-    res.status(500).json({
-      error: { message: 'Internal server error during authentication.', status: 500 },
-    });
-  }
+  await ensureDevUser();
+  req.session.user = {
+    userId: DEV_DEFAULT_USER.id,
+    email: DEV_DEFAULT_USER.email,
+    displayName: DEV_DEFAULT_USER.displayName,
+  };
+  req.session.save(() => res.redirect(config.FRONTEND_URL));
 });
 
 /**

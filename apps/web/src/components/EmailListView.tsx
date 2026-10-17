@@ -9,6 +9,8 @@ interface EmailListViewProps {
   onRefresh: () => void;
   onSelectEmail: (email: EmailDto) => void;
   activeTab: 'scheduled' | 'sent';
+  statusFilter: string;
+  onStatusFilterChange: (status: string) => void;
 }
 
 export const EmailListView: React.FC<EmailListViewProps> = ({
@@ -19,8 +21,19 @@ export const EmailListView: React.FC<EmailListViewProps> = ({
   onRefresh,
   onSelectEmail,
   activeTab,
+  statusFilter,
+  onStatusFilterChange,
 }) => {
   const [starredIds, setStarredIds] = useState<Set<string>>(new Set());
+  const [filterOpen, setFilterOpen] = useState(false);
+  const statusLabels: Record<string, string> = {
+    DRAFT: 'Draft',
+    SCHEDULED: 'Scheduled',
+    PROCESSING: 'Processing',
+    SENT: 'Sent',
+    FAILED: 'Failed',
+    CANCELLED: 'Cancelled',
+  };
 
   const toggleStar = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -75,11 +88,48 @@ export const EmailListView: React.FC<EmailListViewProps> = ({
           id="email-search-input"
         />
         <div className="search-actions">
-          <button type="button" className="icon-btn" title="Filter emails">
+          <button
+            type="button"
+            className="icon-btn"
+            title="Filter emails"
+            aria-label="Filter emails"
+            aria-expanded={filterOpen}
+            aria-haspopup="menu"
+            onClick={() => setFilterOpen((open) => !open)}
+          >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
             </svg>
           </button>
+          {filterOpen && (
+            <div className="email-filter-menu" role="menu" aria-label="Email status filter">
+              <span className="email-filter-heading">Filter by status</span>
+              {[
+                ['CURRENT', `Current view (${activeTab})`],
+                ['ALL', 'All statuses'],
+                ['DRAFT', 'Draft'],
+                ['SCHEDULED', 'Scheduled'],
+                ['PROCESSING', 'Processing'],
+                ['SENT', 'Sent'],
+                ['FAILED', 'Failed'],
+                ['CANCELLED', 'Cancelled'],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={statusFilter === value}
+                  className={`email-filter-option${statusFilter === value ? ' selected' : ''}`}
+                  onClick={() => {
+                    onStatusFilterChange(value);
+                    setFilterOpen(false);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           <button type="button" className="icon-btn" onClick={onRefresh} title="Refresh emails" id="refresh-emails-btn">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polyline points="23 4 23 10 17 10" />
@@ -133,7 +183,9 @@ export const EmailListView: React.FC<EmailListViewProps> = ({
                       {formatScheduleBadge(email.scheduledTime)}
                     </span>
                   ) : (
-                    <span className="badge-sent-pill">Sent</span>
+                    <span className={`badge-status-pill status-${email.status.toLowerCase()}`}>
+                      {statusLabels[email.status] ?? email.status}
+                    </span>
                   )}
 
                   <span className="email-row-subject">

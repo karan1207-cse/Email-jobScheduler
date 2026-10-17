@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { Email, EmailStatus } from '@prisma/client';
+import type { EmailAttachmentInput, EmailAttachmentMetadata } from '@reachinbox/shared';
 import type { EmailDto, PaginatedResponse } from '@reachinbox/shared';
 import { getPrismaClient } from '../db/prisma.js';
 import { ConflictError, NotFoundError } from '../middleware/errorHandler.js';
@@ -31,13 +32,24 @@ export async function ensureDevUser(): Promise<void> {
   });
 }
 
-function computeFingerprint(payload: { recipient: string; subject: string; body: string }): string {
+function getAttachmentMetadata(value: unknown): EmailAttachmentMetadata[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item !== 'object' || item === null) return [];
+    const attachment = item as Partial<EmailAttachmentInput>;
+    if (typeof attachment.filename !== 'string' || typeof attachment.contentType !== 'string' || typeof attachment.size !== 'number') return [];
+    return [{ filename: attachment.filename, contentType: attachment.contentType, size: attachment.size }];
+  });
+}
+
+function computeFingerprint(payload: { recipient: string; subject: string; body: string; attachments?: EmailAttachmentInput[] }): string {
   return crypto
     .createHash('sha256')
     .update(JSON.stringify({
       recipient: payload.recipient.trim().toLowerCase(),
       subject: payload.subject.trim(),
       body: payload.body,
+      attachments: payload.attachments ?? [],
     }))
     .digest('hex');
 }
@@ -49,9 +61,12 @@ function mapToDto(email: Email): EmailDto {
     recipient: email.recipient,
     subject: email.subject,
     body: email.body,
+    attachments: getAttachmentMetadata(email.attachments),
     status: email.status as EmailDto['status'],
     scheduledTime: email.scheduledTime ? email.scheduledTime.toISOString() : null,
     sentAt: email.sentAt ? email.sentAt.toISOString() : null,
+    messageId: email.messageId ?? null,
+    previewUrl: email.previewUrl ?? null,
     idempotencyKey: email.idempotencyKey,
     attemptCount: email.attemptCount,
     lastError: email.lastError,
@@ -116,6 +131,7 @@ export async function createDraftEmail(
         recipient: input.recipient.trim(),
         subject: input.subject.trim(),
         body: input.body,
+        attachments: input.attachments ?? [],
         status: 'DRAFT',
         idempotencyKey: trimmedKey,
         requestFingerprint: trimmedKey ? fingerprint : null,

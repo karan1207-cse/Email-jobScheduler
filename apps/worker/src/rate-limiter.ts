@@ -1,38 +1,51 @@
 /**
- * Distributed Rate Limiter — Milestone 4
+ * Distributed Rate Limiter
  *
- * Implements atomic, cross-process rate limiting and send pacing using a single
- * Redis Lua script to guarantee zero race conditions, zero quota leaks, and no worker sleeping.
+ * Atomic, cross-process rate limiting and send pacing in one Redis Lua script,
+ * so every worker and every instance shares the same counters.
  *
- * Two checks are evaluated atomically:
+ * Two checks are evaluated atomically, using Redis server time (no clock skew
+ * between workers):
  * 1. **Pacing interval** (`PTTL` on `{prefix}:{scope}:pace`):
- *    If an interval is active, returns `{2, pttl_ms}` immediately without touching
- *    the hourly counter. No rollback is needed and no capacity can leak.
+ *    If an interval is active, returns `{2, pttl_ms}` without touching the
+ *    hourly counter, so no capacity can leak.
  *
- * 2. **Hourly limit** (`INCR` on `{prefix}:{scope}:hourly`):
- *    If pacing is clear, atomically increments the hourly counter. If new count
- *    exceeds `maxPerHour`, decrements immediately and returns `{1, ttl_seconds}`.
+ * 2. **Hourly limit** (`INCR` on `{prefix}:{scope}:hour:<window>`), where
+ *    `<window>` is the clock hour (epoch ms / 3 600 000). If the new count
+ *    exceeds `maxPerHour`, it is decremented again and the script returns
+ *    `{1, ms_until_next_window, next_window_start_ms}`, so the job is
+ *    rescheduled to the start of the next hour window instead of being dropped
+ *    or failed. Every deferred job gets the same absolute start time, and BullMQ
+ *    keeps jobs with an equal delay timestamp in the order they were deferred,
+ *    so the original order is preserved.
  *
- * 3. If both pass:
- *    The pacing lock is set with `SET pace_key 1 PX interval_ms` and returns `{0, 0}`.
+ * 3. If both pass, the pacing lock is set with `SET pace_key 1 PX interval_ms`
+ *    and the script returns `{0, count_in_window}`.
  *
  * **Redis failure behaviour**: if Redis throws, the error propagates upward.
  * The processor treats it as transient, reverts the DB state, and does NOT
- * send the email — ensuring no unregulated sends occur.
+ * send the email, so no unregulated sends occur.
  */
 import type { Redis } from 'ioredis';
 import { workerConfig } from './config.js';
 
+export const HOUR_MS = 3_600_000;
+
 // ── Atomic Lua Script ────────────────────────────────────────────────────────
 
-const ATOMIC_RATE_LIMIT_SCRIPT = `
-local hourly_key = KEYS[1]
+export const ATOMIC_RATE_LIMIT_SCRIPT = `
+local hourly_base = KEYS[1]
 local pacing_key = KEYS[2]
 local max_hourly = tonumber(ARGV[1])
 local interval_ms = tonumber(ARGV[2])
+local hour_ms = 3600000
 
--- 1. Check pacing interval first (if pacing is enabled)
--- If pacing is active, return immediately without touching hourly counter.
+local t = redis.call('TIME')
+local now_ms = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local window = math.floor(now_ms / hour_ms)
+local ms_until_next = (window + 1) * hour_ms - now_ms
+
+-- 1. Pacing interval first: if active, return without touching the hourly counter.
 if interval_ms > 0 then
   local pttl = redis.call('PTTL', pacing_key)
   if pttl > 0 then
@@ -40,34 +53,39 @@ if interval_ms > 0 then
   end
 end
 
--- 2. Check hourly limit (if hourly limit is enabled)
+-- 2. Hourly limit for the current clock-hour window.
+local current = 0
 if max_hourly > 0 then
-  local current = redis.call('INCR', hourly_key)
+  local hourly_key = hourly_base .. ':' .. window
+  current = redis.call('INCR', hourly_key)
   if current == 1 then
-    redis.call('EXPIRE', hourly_key, 3600)
+    -- Keep the counter one extra hour for monitoring, then let it expire.
+    redis.call('PEXPIRE', hourly_key, ms_until_next + hour_ms)
   end
   if current > max_hourly then
     redis.call('DECR', hourly_key)
-    local ttl = redis.call('TTL', hourly_key)
-    if ttl < 0 then ttl = 3600 end
-    return {1, ttl}
+    return {1, ms_until_next, (window + 1) * hour_ms}
   end
 end
 
--- 3. Both checks passed: set pacing lock key atomically
+-- 3. Both checks passed: set the pacing lock.
 if interval_ms > 0 then
   redis.call('SET', pacing_key, '1', 'PX', interval_ms)
 end
 
-return {0, 0}
+return {0, current}
 `;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface RateLimitResult {
   allowed: boolean;
+  /** 'hourly' when the hourly quota is used up, 'pacing' when the min interval is active. */
+  limitType?: 'hourly' | 'pacing';
   /** When blocked, the number of ms to wait before retrying. */
   retryAfterMs: number;
+  /** Absolute time (epoch ms) to retry at, when known: the next hour window start. */
+  retryAt?: number;
   /** Human-readable reason for blocking. */
   reason?: string;
 }
@@ -100,28 +118,46 @@ export class DistributedRateLimiter {
    * Attempt to acquire a send slot for the given sender.
    * Checks both pacing interval and hourly limit atomically in a single Redis script.
    */
-  async acquireSendSlot(senderId: string): Promise<RateLimitResult> {
+  private keysFor(senderId: string) {
     const scopeTag = this.scope === 'global' ? 'global' : `user:${senderId}`;
-    // Using Redis hash-tags `{...}` ensures both keys map to the same hash slot in Redis Cluster
-    const hourlyKey = `${this.prefix}:{${scopeTag}}:hourly`;
-    const pacingKey = `${this.prefix}:{${scopeTag}}:pace`;
+    // Redis hash-tags `{...}` keep both keys in the same slot in Redis Cluster.
+    return {
+      scopeTag,
+      hourlyBase: `${this.prefix}:{${scopeTag}}:hour`,
+      pacingKey: `${this.prefix}:{${scopeTag}}:pace`,
+    };
+  }
+
+  /** 'global' for a shared limit, otherwise the sender this limit applies to. */
+  scopeFor(senderId: string): string {
+    return this.scope === 'global' ? 'global' : senderId;
+  }
+
+  /**
+   * Attempt to acquire a send slot for the given sender.
+   * Checks both pacing interval and hourly limit atomically in a single Redis script.
+   */
+  async acquireSendSlot(senderId: string): Promise<RateLimitResult> {
+    const { hourlyBase, pacingKey } = this.keysFor(senderId);
 
     const result = (await this.redis.eval(
       ATOMIC_RATE_LIMIT_SCRIPT,
       2,
-      hourlyKey,
+      hourlyBase,
       pacingKey,
       String(this.maxPerHour),
       String(this.intervalMs)
-    )) as [number, number];
+    )) as [number, number, number?];
 
-    // Status 1: Hourly limit reached
+    // Status 1: Hourly limit reached; result[1] = ms until the next hour window
     if (result[0] === 1) {
-      const retryAfterMs = result[1] * 1000; // TTL is in seconds
+      const retryAfterMs = Math.max(result[1], 1000); // At least 1s
       return {
         allowed: false,
-        retryAfterMs: Math.max(retryAfterMs, 1000), // At least 1s
-        reason: `Hourly rate limit reached (${this.maxPerHour}/hr). Retry after ${Math.ceil(retryAfterMs / 1000)}s.`,
+        limitType: 'hourly',
+        retryAfterMs,
+        retryAt: result[2],
+        reason: `Hourly rate limit reached (${this.maxPerHour}/hr). Rescheduled to the next hour window in ${Math.ceil(retryAfterMs / 1000)}s.`,
       };
     }
 
@@ -130,6 +166,7 @@ export class DistributedRateLimiter {
       const retryAfterMs = result[1]; // Already in ms
       return {
         allowed: false,
+        limitType: 'pacing',
         retryAfterMs: Math.max(retryAfterMs, 100), // At least 100ms
         reason: `Send pacing: minimum ${this.intervalMs}ms between sends. Retry after ${retryAfterMs}ms.`,
       };
@@ -139,12 +176,11 @@ export class DistributedRateLimiter {
   }
 
   /**
-   * Get current hourly usage for monitoring/debugging.
+   * Get current hourly usage (this clock hour) for monitoring/debugging.
    */
-  async getCurrentHourlyCount(senderId: string): Promise<number> {
-    const scopeTag = this.scope === 'global' ? 'global' : `user:${senderId}`;
-    const hourlyKey = `${this.prefix}:{${scopeTag}}:hourly`;
-    const val = await this.redis.get(hourlyKey);
+  async getCurrentHourlyCount(senderId: string, now: number = Date.now()): Promise<number> {
+    const { hourlyBase } = this.keysFor(senderId);
+    const val = await this.redis.get(`${hourlyBase}:${Math.floor(now / HOUR_MS)}`);
     return val ? parseInt(val, 10) : 0;
   }
 }

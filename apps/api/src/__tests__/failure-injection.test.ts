@@ -214,8 +214,11 @@ describe('Milestone 10: Failure-Injection Matrix & Reliability', () => {
       };
       vi.spyOn(prismaModule, 'getPrismaClient').mockReturnValue(mockPrisma as any);
 
-      // Simulate Elasticsearch outage: probe returns false, triggering automatic Postgres fallback
-      vi.spyOn(esService, 'isElasticsearchAvailable').mockResolvedValue(false);
+      // Simulate an actual client outage. Spying on the exported availability
+      // helper does not replace the module's internal function binding.
+      vi.spyOn(esService.getEsClient(), 'ping').mockRejectedValue(
+        new Error('Elasticsearch is unavailable')
+      );
 
       const res = await request(app)
         .get('/api/search/emails?q=Fallback')
@@ -316,6 +319,7 @@ describe('Milestone 10: Failure-Injection Matrix & Reliability', () => {
         recipient: payload.recipient.trim().toLowerCase(),
         subject: payload.subject.trim(),
         body: payload.body,
+        attachments: [],
       });
       const fingerprint = crypto.createHash('sha256').update(normalized).digest('hex');
 

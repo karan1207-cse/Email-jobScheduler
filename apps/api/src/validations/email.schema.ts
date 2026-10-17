@@ -1,5 +1,15 @@
 import { z } from 'zod';
 
+const emailAttachmentSchema = z.object({
+  filename: z.string().trim().min(1).max(255),
+  contentType: z.string().trim().min(1).max(255),
+  size: z.number().int().positive().max(5 * 1024 * 1024),
+  contentBase64: z.string().min(1).max(7 * 1024 * 1024).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+}).strict().refine((file) => {
+  const padding = file.contentBase64.endsWith('==') ? 2 : file.contentBase64.endsWith('=') ? 1 : 0;
+  return Math.floor(file.contentBase64.length * 3 / 4) - padding === file.size;
+}, 'Attachment size does not match its contents');
+
 export const emailStatusEnum = z.enum([
   'DRAFT',
   'SCHEDULED',
@@ -24,6 +34,8 @@ export const createEmailSchema = z.object({
     .string({ required_error: 'Email body is required' })
     .min(1, 'Body cannot be empty')
     .max(50000, 'Body must not exceed 50,000 characters'),
+  attachments: z.array(emailAttachmentSchema).max(5, 'You can attach up to 5 files').optional().default([])
+    .refine((files) => files.reduce((sum, file) => sum + file.size, 0) <= 8 * 1024 * 1024, 'Attachments must total 8 MB or less'),
 }).strict();
 
 export const updateEmailSchema = z.object({

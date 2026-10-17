@@ -7,8 +7,8 @@ interface LoginScreenProps {
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, authError }) => {
-  const [email, setEmail] = useState<string>('oliver.brown@domain.io');
-  const [password, setPassword] = useState<string>('••••••••');
+  const [email, setEmail] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(authError || null);
 
@@ -30,18 +30,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, authEr
       const user = await loginWithEmail(email.trim(), password);
       onLoginSuccess(user);
     } catch (err: unknown) {
-      console.warn('Backend API unreachable, entering demo mode:', err);
-      const namePart = email.split('@')[0] || 'Oliver Brown';
-      const formattedName = namePart
-        .split(/[._-]/)
-        .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-        .join(' ');
-      onLoginSuccess({
-        id: 'demo-user-oliver',
-        email: email.trim(),
-        displayName: formattedName || 'Oliver Brown',
-        picture: null,
-      });
+      setError(err instanceof Error ? err.message : 'Sign in failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -91,7 +80,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, authEr
 
         <div className="figma-login-divider">
           <span className="figma-divider-line"></span>
-          <span className="figma-divider-text">or sign up through email</span>
+          <span className="figma-divider-text">Email/password sign-in is unavailable</span>
           <span className="figma-divider-line"></span>
         </div>
 
@@ -131,11 +120,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, authEr
           </button>
         </form>
 
-        <div className="figma-login-footer">
-          <span className="figma-demo-hint">
-            Demo account: <strong>oliver.brown@domain.io</strong>
-          </span>
-        </div>
       </div>
     </div>
   );

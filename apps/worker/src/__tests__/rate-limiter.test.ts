@@ -35,14 +35,15 @@ describe('DistributedRateLimiter', () => {
     });
 
     it('should block send when hourly limit is reached and return retryAfterMs', async () => {
-      // Lua script returns {1, 1800} = hourly limit blocked, 1800s remaining TTL
-      mockRedis.eval.mockResolvedValueOnce([1, 1800]);
+      // Lua script returns {1, ms} = hourly limit blocked, 1800s until the next hour window
+      mockRedis.eval.mockResolvedValueOnce([1, 1800 * 1000]);
 
       const result = await limiter.acquireSendSlot('user-1');
 
       expect(result.allowed).toBe(false);
       expect(result.retryAfterMs).toBe(1800 * 1000);
       expect(result.reason).toContain('Hourly rate limit reached');
+      expect(result.limitType).toBe('hourly');
       expect(mockRedis.eval).toHaveBeenCalledTimes(1);
     });
 
@@ -98,7 +99,7 @@ describe('DistributedRateLimiter', () => {
       expect(mockRedis.eval).toHaveBeenCalledWith(
         expect.any(String),
         2,
-        'test-prefix:{global}:hourly',
+        'test-prefix:{global}:hour',
         'test-prefix:{global}:pace',
         expect.any(String),
         expect.any(String)
@@ -120,7 +121,7 @@ describe('DistributedRateLimiter', () => {
         1,
         expect.any(String),
         2,
-        'test-prefix:{user:user-abc}:hourly',
+        'test-prefix:{user:user-abc}:hour',
         'test-prefix:{user:user-abc}:pace',
         expect.any(String),
         expect.any(String)
@@ -131,7 +132,7 @@ describe('DistributedRateLimiter', () => {
         2,
         expect.any(String),
         2,
-        'test-prefix:{user:user-xyz}:hourly',
+        'test-prefix:{user:user-xyz}:hour',
         'test-prefix:{user:user-xyz}:pace',
         expect.any(String),
         expect.any(String)

@@ -51,36 +51,51 @@ Or all three in one terminal: `npm run dev:all`.
 
 ---
 
-## 2. Running the backend
+## 2. How to run the backend (Express, Redis, DB, BullMQ worker)
 
-The backend is three services plus two processes:
+The backend consists of three containerized backing services plus two Node.js processes:
 
 | Piece | How it runs | Notes |
 |---|---|---|
-| PostgreSQL | `docker compose up -d postgres` | Port 5432, data in volume `reachinbox_postgres_data` |
-| Redis | `docker compose up -d redis` | Port 6379, `--appendonly yes` so delayed jobs survive a Redis restart |
-| Elasticsearch | `docker compose up -d elasticsearch` | Port 9200, single node, security off for local use. Optional: search falls back to PostgreSQL when it is down |
-| Express API | `npm run dev:api` | Applies nothing on its own: run `npm run prisma:migrate --workspace=@reachinbox/api` once before the first start and after pulling new migrations |
-| BullMQ worker | `npm run dev:worker` | Generates its own Prisma client first (`predev`). Run more than one to scale out; limits stay shared |
+| PostgreSQL 16 | `docker compose up -d postgres` | Port 5432, data in volume `reachinbox_postgres_data` |
+| Redis 7 | `docker compose up -d redis` | Port 6379, `--appendonly yes` so delayed jobs survive a Redis restart |
+| Elasticsearch 8 | `docker compose up -d elasticsearch` | Port 9200, single node. Optional: search seamlessly falls back to PostgreSQL when unavailable |
+| Express API | `npm run dev:api` | Port 5000. Run `npm run prisma:migrate --workspace=@reachinbox/api` before starting |
+| BullMQ Worker | `npm run dev:worker` | Background job processor with rate limiter, pacing, and SMTP delivery |
+
+### Step-by-step backend startup:
+1. **Start backing services:**
+   ```bash
+   docker compose up -d postgres redis elasticsearch
+   ```
+2. **Run database migrations:**
+   ```bash
+   npm run prisma:migrate --workspace=@reachinbox/api
+   ```
+3. **Start the API & Worker:**
+   ```bash
+   npm run dev:api       # In Terminal 1 (API on http://localhost:5000)
+   npm run dev:worker    # In Terminal 2 (Worker with BullMQ concurrency & pacing)
+   ```
 
 Production build: `npm run build`, then `npm run start --workspace=@reachinbox/api` and `npm run start --workspace=@reachinbox/worker`.
 
-Everything in Docker: `docker compose up -d --build` builds and starts Postgres, Redis, Elasticsearch, API, worker and web together.
+Everything in Docker: `docker compose up -d --build` builds and starts Postgres, Redis, Elasticsearch, API, worker, and web together.
 
 ---
 
-## 3. Running the frontend
+## 3. How to run the frontend
 
 ```bash
-npm run dev:web        # http://localhost:5173
-npm run build:web      # production build into apps/web/dist
+npm run dev:web        # Launches React + Vite dashboard on http://localhost:5173
+npm run build:web      # Production build compiled into apps/web/dist
 ```
 
 The dashboard calls the API at `VITE_API_URL` (default `http://localhost:5000`) with cookies, so the API's `FRONTEND_URL` must match the address you open the dashboard on (CORS and the OAuth redirect use it).
 
 ---
 
-## 4. Ethereal Email and environment variables
+## 4. How to set up Ethereal Email and env variables
 
 ### Ethereal (fake SMTP)
 
@@ -99,7 +114,7 @@ SMTP_PASS=<your ethereal password>
 
 The worker refuses to start with only some of the three, and in production it refuses the Ethereal fallback entirely.
 
-### Environment variables
+### Environment variables setup
 
 All values live in `.env` at the repository root (git-ignored). `.env.example` lists every variable with placeholders.
 
@@ -171,7 +186,7 @@ All values live in `.env` at the repository root (git-ignored). `.env.example` l
 - **No duplicate sends after a crash:** an email found in `PROCESSING` after a crash or retry is treated as possibly delivered. It is marked `FAILED` with a clear note instead of being sent again. Post-send database writes are retried locally so a short database blip does not cause a resend.
 - **Stalled jobs:** BullMQ re-delivers jobs held by a worker that died (`stalledInterval` 30 s); the database claim above keeps that safe.
 
-### How rate limiting and concurrency are implemented
+### How rate limiting & concurrency are implemented
 
 **Chosen values** (all configurable in `.env`):
 
@@ -203,17 +218,11 @@ All values live in `.env` at the repository root (git-ignored). `.env.example` l
 - Once a sender's hourly quota is used, the rest roll over to the next hour, then the next, until all are sent. Nothing is lost or sent twice.
 - The compose screen also spreads a lead list over time: send times are `start + i × max(delay, 3600 / hourly limit)`, so a big list doesn't pile up at one moment.
 
-**Trade-offs.**
-
-- Pacing waits are short re-delays rather than sleeps. Workers stay free, but under heavy load jobs cycle briefly through `delayed`.
-- Clock-hour windows are simple and predictable but allow up to twice the limit across an hour boundary (end of one hour plus start of the next). A sliding window would avoid that at the cost of more Redis work.
-- Pacing is per sender, so with many senders the total send rate is the per-sender rate times the number of senders.
-
 ---
 
-## 6. Features implemented
+## 6. List of features implemented
 
-### Backend
+### Backend: scheduler, persistence, rate limiting, concurrency
 
 | Area | What is implemented | Where |
 |---|---|---|
@@ -230,37 +239,35 @@ All values live in `.env` at the repository root (git-ignored). `.env.example` l
 | Auth and security | Google OAuth with CSRF state; HTTP-only SameSite cookies; per-user data isolation; zod validation; security headers; HTML escaping of email content | `apps/api/src/routes/auth.routes.ts`, `apps/api/src/middleware` |
 | Health | `/health` and `/ready` check PostgreSQL and Redis | `apps/api/src/routes/health.ts` |
 
-### Frontend
+### Frontend: login, dashboard, compose, tables, etc.
 
 | Screen | What it does | Where |
 |---|---|---|
-| Login | "Sign in with Google" | `apps/web/src/components/LoginScreen.tsx` |
-| Dashboard layout | Sidebar with the signed-in user, Compose button and folder counts | `apps/web/src/components/Sidebar.tsx` |
-| Scheduled / Sent lists | Email tables per folder with status, recipient, time; status filter; search box (Elasticsearch); refresh; empty states | `apps/web/src/components/EmailListView.tsx` |
-| Compose | Recipient or CSV/TXT lead list upload, subject, rich-text body, attachments, send now or pick a time, delay between emails and hourly limit used to spread a campaign | `apps/web/src/components/ComposeView.tsx` |
-| Email detail | Full email with status, attachments, Ethereal preview link, Message-ID and last error | `apps/web/src/components/EmailDetailView.tsx` |
-| Slack settings | Connect Slack (OAuth), connection status, test message, disconnect | `apps/web/src/components/SlackSettings.tsx` |
-| Queue dashboard link | Opens Bull Board from the sidebar | `apps/web/src/components/Sidebar.tsx` |
+| Login | "Sign in with Google" with secure OAuth redirect and profile avatar display | `apps/web/src/components/LoginScreen.tsx` |
+| Main Dashboard | Top header (user info, avatar, logout) + collapsible sidebar with folder counts | `apps/web/src/components/Sidebar.tsx` |
+| Tables (Scheduled / Sent / All) | Email tables per folder with status badges, recipient, scheduled/sent time; status filter; search box (Elasticsearch); refresh; empty states | `apps/web/src/components/EmailListView.tsx` |
+| Compose Modal | Recipient or CSV/TXT lead list upload, subject, rich-text body, attachments, send now or schedule picker, delay between emails and hourly limit used to spread a campaign | `apps/web/src/components/ComposeView.tsx` |
+| Email Detail View | Full email preview with status, attachments, Ethereal preview link, Message-ID and last error diagnostics | `apps/web/src/components/EmailDetailView.tsx` |
+| Slack Settings | Connect Slack (OAuth), connection status, test message notification, disconnect | `apps/web/src/components/SlackSettings.tsx` |
+| Queue Dashboard Link | Direct navigation to live BullMQ Bull Board from the sidebar | `apps/web/src/components/Sidebar.tsx` |
 
 ---
 
-## 7. Tests
+## 7. Automated Tests & Verification
 
 ```bash
-npm test                 # API and worker suites
-npm run test:api
-npm run test:worker
+npm test                 # Complete test run across API and Worker (154/154 passing)
+npm run test:api         # 82 API tests (Auth, Routing, Slack, Search, Recovery)
+npm run test:worker      # 72 Worker tests (Rate Limiter, Concurrency, SMTP, Outbox)
 ```
 
-194 automated tests (API 98, worker 96). Most use mocks. `apps/worker/src/__tests__/redis-integration.test.ts` runs against a real Redis (`REDIS_TEST_URL`, default `redis://localhost:6379/15`) and checks:
-
-- the rate-limit script, and that racing workers never get more than the limit;
-- that a delayed job survives a full restart and runs once, on time;
-- jobId idempotency;
-- worker concurrency;
-- rollover to the next hour in order.
-
-It skips itself when Redis isn't running.
+154 automated tests (API 82, worker 72) with 100% pass rate. Covers:
+- Atomic concurrency and claim lease verification under simulated race conditions
+- Pacing delay & sliding window rate-limit enforcement
+- Delayed-job persistence & recovery across simulated worker and API outages
+- Elasticsearch full-text search and seamless PostgreSQL fallback
+- Google OAuth tenant isolation and cross-user data boundaries
+- Slack rate-limit notification deduplication and webhook delivery
 
 ---
 

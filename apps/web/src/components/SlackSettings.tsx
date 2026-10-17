@@ -32,9 +32,13 @@ export const SlackSettings: React.FC = () => {
       if (res.ok) {
         const data = (await res.json()) as SlackStatus;
         setStatus(data);
+      } else {
+        throw new Error(`Slack status could not be loaded (HTTP ${res.status}).`);
       }
     } catch (err) {
       console.warn('[Slack] Failed to query status:', err);
+      const message = err instanceof Error ? err.message : 'Slack status could not be loaded.';
+      setFeedback((current) => current ?? { type: 'error', message });
     } finally {
       setLoading(false);
     }
@@ -110,8 +114,8 @@ export const SlackSettings: React.FC = () => {
 
   const handleSaveDirectWebhook = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!webhookUrl.startsWith('https://hooks.slack.com/')) {
-      setFeedback({ type: 'error', message: 'Invalid URL. Slack webhooks must begin with https://hooks.slack.com/' });
+    if (!/^https:\/\/hooks\.slack(?:-gov)?\.com\/services\//.test(webhookUrl.trim())) {
+      setFeedback({ type: 'error', message: 'Enter a valid Slack Incoming Webhook URL.' });
       return;
     }
     setSavingWebhook(true);
@@ -121,24 +125,26 @@ export const SlackSettings: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ webhookUrl, channelName }),
+        body: JSON.stringify({ webhookUrl: webhookUrl.trim(), channelName: channelName.trim() }),
       });
       if (res.ok) {
         setFeedback({ type: 'success', message: 'Slack webhook saved and activated!' });
         setShowManualWebhook(false);
-        fetchStatus();
+        setWebhookUrl('');
+        await fetchStatus();
       } else {
-        throw new Error('Failed to save webhook.');
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error?.message || 'Failed to save webhook.');
       }
     } catch (err) {
-      setFeedback({ type: 'error', message: 'Failed to configure direct webhook.' });
+      setFeedback({ type: 'error', message: err instanceof Error ? err.message : 'Failed to configure direct webhook.' });
     } finally {
       setSavingWebhook(false);
     }
   };
 
   return (
-    <div className="card-glass slack-settings-card">
+    <section className="card-glass slack-settings-card" aria-labelledby="slack-settings-title">
       <div className="slack-header">
         <div className="slack-brand">
           <svg width="24" height="24" viewBox="0 0 24 24">
@@ -160,12 +166,12 @@ export const SlackSettings: React.FC = () => {
             />
           </svg>
           <div>
-            <h3 style={{ fontSize: '1.05rem', fontWeight: 700 }}>Slack Rate-Limit Alerting</h3>
-            <span className="section-desc">Automated alerts when worker sending quotas or pacing limits engage</span>
+            <h3 id="slack-settings-title">Slack notifications</h3>
+            <span className="section-desc">Get a Slack message when email sending is paused by a rate limit.</span>
           </div>
         </div>
 
-        <div className="slack-status-pill">
+        <div className="slack-status-pill" aria-live="polite">
           {loading ? (
             <span className="status-pill">Checking...</span>
           ) : status?.connected ? (
@@ -177,15 +183,15 @@ export const SlackSettings: React.FC = () => {
       </div>
 
       {feedback && (
-        <div className={`alert-box alert-${feedback.type === 'success' ? 'success' : 'danger'}`} style={{ marginTop: '1rem' }}>
+          <div className={`slack-feedback slack-feedback-${feedback.type}`} role={feedback.type === 'error' ? 'alert' : 'status'}>
           <span>{feedback.message}</span>
-          <button className="btn-alert-dismiss" onClick={() => setFeedback(null)}>
+            <button type="button" className="btn-alert-dismiss" aria-label="Dismiss notification" onClick={() => setFeedback(null)}>
             &times;
           </button>
         </div>
       )}
 
-      <div className="slack-body" style={{ marginTop: '1rem' }}>
+      <div className="slack-body">
         {status?.connected ? (
           <div className="slack-connected-view">
             <div className="slack-meta-box">
@@ -199,7 +205,7 @@ export const SlackSettings: React.FC = () => {
               </div>
               <div className="meta-item">
                 <span className="meta-label">Deduplication</span>
-                <span className="meta-val">5-min Redis Window</span>
+                <span className="meta-val">One alert every 5 minutes</span>
               </div>
             </div>
 
@@ -215,7 +221,7 @@ export const SlackSettings: React.FC = () => {
                 className="btn btn-secondary btn-sm"
                 onClick={handleDisconnect}
                 disabled={disconnecting}
-                style={{ color: '#f87171' }}
+                aria-label="Disconnect Slack workspace"
               >
                 {disconnecting ? 'Disconnecting...' : 'Disconnect'}
               </button>
@@ -223,14 +229,16 @@ export const SlackSettings: React.FC = () => {
           </div>
         ) : (
           <div className="slack-disconnected-view">
-            <p className="section-desc" style={{ marginBottom: '1rem' }}>
-              Connect your Slack workspace so your team receives automated alerts when the hourly rate limit is reached.
+            <p className="section-desc slack-intro">
+              Connect a workspace and choose the channel for delivery. Your team will receive an alert when sending is rate-limited.
             </p>
 
             <div className="slack-actions-row">
               <button
                 className="btn btn-primary btn-sm"
                 onClick={handleConnectOAuth}
+                disabled={loading || status?.configured === false}
+                title={status?.configured === false ? 'Configure Slack OAuth credentials on the API first.' : 'Connect a Slack workspace'}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
@@ -247,8 +255,18 @@ export const SlackSettings: React.FC = () => {
               </button>
             </div>
 
+            {status?.configured === false && (
+              <p className="slack-setup-note">
+                Slack OAuth isn’t configured on this API yet. An incoming webhook can connect notifications without OAuth.
+              </p>
+            )}
+
             {showManualWebhook && (
-              <form onSubmit={handleSaveDirectWebhook} className="webhook-form" style={{ marginTop: '1rem' }}>
+              <form onSubmit={handleSaveDirectWebhook} className="webhook-form">
+                <div className="webhook-form-heading">
+                  <strong>Connect with an incoming webhook</strong>
+                  <span>Webhook URLs are stored on the server and never shown again.</span>
+                </div>
                 <div className="form-group">
                   <label htmlFor="webhook-url">Slack Incoming Webhook URL *</label>
                   <input
@@ -280,6 +298,6 @@ export const SlackSettings: React.FC = () => {
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 };

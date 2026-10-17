@@ -201,7 +201,9 @@ export interface SearchEmailsResult {
 
 /**
  * Search emails in Elasticsearch with multi-user isolation.
- * Falls back to a Postgres ILIKE query if Elasticsearch is unavailable.
+ * Falls back to PostgreSQL if Elasticsearch is unavailable, fails, or has no
+ * matches for a text query. PostgreSQL is the source of truth, while the
+ * Elasticsearch index is rebuildable and can be incomplete after outages.
  */
 export async function searchEmails(params: SearchEmailsParams): Promise<SearchEmailsResult> {
   const {
@@ -266,14 +268,18 @@ export async function searchEmails(params: SearchEmailsParams): Promise<SearchEm
         ? response.hits.total
         : (response.hits.total?.value ?? 0);
 
-      return {
-        data:       hits.map(h => h._source as EmailSearchHit),
-        total,
-        page:       Math.max(1, page),
-        limit:      safeLimit,
-        totalPages: Math.ceil(total / safeLimit) || 1,
-        source:     'elasticsearch',
-      };
+      if (total > 0 || !query) {
+        return {
+          data:       hits.map(h => h._source as EmailSearchHit),
+          total,
+          page:       Math.max(1, page),
+          limit:      safeLimit,
+          totalPages: Math.ceil(total / safeLimit) || 1,
+          source:     'elasticsearch',
+        };
+      }
+
+      console.warn('[ES] Search returned no matches; checking PostgreSQL for records missing from the index.');
     } catch (err) {
       console.warn('[ES] Search failed, falling back to Postgres:', err instanceof Error ? err.message : err);
     }

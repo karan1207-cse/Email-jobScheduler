@@ -71,10 +71,11 @@ searchRouter.get(
       const { q, status, fromDate, toDate, page, limit } = parsed.data;
 
       // userId is guaranteed by requireAuth middleware
-      const userId =
-        req.session?.user?.userId ??
-        (req.session as { userId?: string })?.userId ??
-        '00000000-0000-0000-0000-000000000001';
+      const userId = req.session?.user?.userId ?? (req.session as { userId?: string } | undefined)?.userId;
+      if (!userId) {
+        res.status(401).json({ error: 'Authentication required.' });
+        return;
+      }
 
       const result = await searchEmails({
         userId,

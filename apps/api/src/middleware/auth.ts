@@ -29,9 +29,8 @@ declare module 'express-session' {
 
 /**
  * Middleware: Require an authenticated session.
- * - In production or when GOOGLE_CLIENT_ID is configured: strictly requires session, else HTTP 401.
+ * - Requires an authenticated session outside tests, else HTTP 401.
  * - In test environment: respects `x-test-user-id` header for easy user switching in tests.
- * - In development mode without OAuth configured: transparently falls back to DEV_DEFAULT_USER.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (req.session?.user?.userId) {
@@ -52,8 +51,9 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     return next();
   }
 
-  // Development fallback when Google OAuth credentials are not provided
-  if (config.NODE_ENV !== 'production' && !config.GOOGLE_CLIENT_ID) {
+  // Unit tests that exercise protected routes without OAuth get an isolated
+  // fixture identity. This branch is unreachable in development/production.
+  if (config.NODE_ENV === 'test') {
     if (!req.session) {
       (req as unknown as { session: Record<string, unknown> }).session = {};
     }

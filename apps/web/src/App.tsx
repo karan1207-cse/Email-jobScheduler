@@ -24,6 +24,7 @@ export const App: React.FC = () => {
 
   // Dashboard view state
   const [currentTab, setCurrentTab] = useState<DashboardTab>('scheduled');
+  const [statusFilterOverride, setStatusFilterOverride] = useState<string | null>(null);
   const [isComposeActive, setIsComposeActive] = useState<boolean>(false);
   const [selectedEmail, setSelectedEmail] = useState<EmailDto | null>(null);
 
@@ -71,85 +72,16 @@ export const App: React.FC = () => {
     setLoadingEmails(true);
 
     try {
-      const filterStatus = currentTab === 'scheduled' ? 'SCHEDULED' : currentTab === 'sent' ? 'SENT' : undefined;
+      const defaultFilterStatus = currentTab === 'scheduled' ? 'SCHEDULED' : currentTab === 'sent' ? 'SENT' : undefined;
+      const filterStatus = statusFilterOverride === 'ALL'
+        ? undefined
+        : statusFilterOverride ?? defaultFilterStatus;
 
       // If search query is present, call searchEmailsApi; otherwise listEmails
       const res = searchQuery.trim()
-        ? await searchEmailsApi(searchQuery.trim(), filterStatus).catch(() => ({ data: [], pagination: { total: 0, page: 1, limit: 20, totalPages: 1 } }))
-        : await listEmails(1, 50, filterStatus).catch(() => ({ data: [], pagination: { total: 0, page: 1, limit: 50, totalPages: 1 } }));
-
-      if (res.data && res.data.length > 0) {
-        setEmails(res.data);
-      } else {
-        // Fallback demo records matching Figma design if database has no records yet
-        if (currentTab === 'scheduled') {
-          setEmails([
-            {
-              id: 'figma-1',
-              userId: user.id,
-              recipient: 'john.smith@domain.io',
-              subject: 'Meeting follow-up',
-              body: 'Hi John, just wanted to follow up on our meeting...',
-              status: 'SCHEDULED',
-              scheduledTime: new Date(Date.now() + 3600000 * 21).toISOString(),
-              sentAt: null,
-              attemptCount: 0,
-              lastError: null,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            },
-            {
-              id: 'figma-2',
-              userId: user.id,
-              recipient: 'olive@domain.io',
-              subject: "Remit, great to meet you - you'll love it",
-              body: 'Hi Olive, just wanted to follow up on our meeting and confirm schedule...',
-              status: 'SCHEDULED',
-              scheduledTime: new Date(Date.now() + 3600000 * 48).toISOString(),
-              sentAt: null,
-              attemptCount: 0,
-              lastError: null,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            },
-          ]);
-          setScheduledCount(12);
-          setSentCount(785);
-        } else {
-          setEmails([
-            {
-              id: 'figma-3',
-              userId: user.id,
-              recipient: 'sarah.wilson@domain.io',
-              subject: 'Re: Project Update',
-              body: 'Thanks for the update, Sarah. Looks good! Everything is on track.',
-              status: 'SENT',
-              scheduledTime: null,
-              sentAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-              attemptCount: 1,
-              lastError: null,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            },
-            {
-              id: 'figma-4',
-              userId: user.id,
-              recipient: 'support@domain.io',
-              subject: 'Issue with login',
-              body: 'I am having trouble logging in to the dashboard... Here are the details.',
-              status: 'SENT',
-              scheduledTime: null,
-              sentAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-              attemptCount: 1,
-              lastError: null,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            },
-          ]);
-          setScheduledCount(12);
-          setSentCount(785);
-        }
-      }
+        ? await searchEmailsApi(searchQuery.trim(), filterStatus)
+        : await listEmails(1, 50, filterStatus);
+      setEmails(res.data || []);
 
       // Fetch counts for both tabs concurrently
       const [scheduledRes, sentRes] = await Promise.all([
@@ -157,14 +89,18 @@ export const App: React.FC = () => {
         listEmails(1, 1, 'SENT').catch(() => null),
       ]);
 
-      if (scheduledRes && scheduledRes.pagination.total > 0) setScheduledCount(scheduledRes.pagination.total);
-      if (sentRes && sentRes.pagination.total > 0) setSentCount(sentRes.pagination.total);
+      setScheduledCount(scheduledRes?.pagination.total ?? 0);
+      setSentCount(sentRes?.pagination.total ?? 0);
     } catch (err) {
       console.error('[Dashboard] Error fetching email data:', err);
+      setEmails([]);
+      setScheduledCount(0);
+      setSentCount(0);
+      setAuthBanner({ type: 'error', message: err instanceof Error ? err.message : 'Could not load emails.' });
     } finally {
       setLoadingEmails(false);
     }
-  }, [user, currentTab, searchQuery]);
+  }, [user, currentTab, searchQuery, statusFilterOverride]);
 
   // 3. Fetch system telemetry
   const fetchTelemetry = useCallback(async () => {
@@ -236,6 +172,7 @@ export const App: React.FC = () => {
         currentTab={currentTab}
         onTabChange={(tab) => {
           setCurrentTab(tab);
+          setStatusFilterOverride(null);
           setSelectedEmail(null);
           setIsComposeActive(false);
         }}
@@ -273,6 +210,7 @@ export const App: React.FC = () => {
             onSuccess={() => {
               setIsComposeActive(false);
               setCurrentTab('scheduled');
+              setStatusFilterOverride(null);
               fetchDashboardData();
             }}
             currentUser={user}
@@ -311,6 +249,8 @@ export const App: React.FC = () => {
             onRefresh={fetchDashboardData}
             onSelectEmail={setSelectedEmail}
             activeTab={currentTab}
+            statusFilter={statusFilterOverride ?? 'CURRENT'}
+            onStatusFilterChange={(status) => setStatusFilterOverride(status === 'CURRENT' ? null : status)}
           />
         )}
       </main>

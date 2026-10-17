@@ -9,7 +9,7 @@
  * 5. Multi-user tenant isolation:
  *    - User A's emails cannot be listed, viewed, updated, deleted, scheduled, or cancelled by User B
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import type { Email, OutboxEvent, User } from '@prisma/client';
 
@@ -109,6 +109,7 @@ describe('Milestone 6: Google OAuth & Multi-User Isolation', () => {
             recipient: data.recipient,
             subject: data.subject,
             body: data.body,
+            attachments: data.attachments || [],
             status: data.status || 'DRAFT',
             scheduledTime: data.scheduledTime || null,
             sentAt: data.sentAt || null,
@@ -118,6 +119,8 @@ describe('Milestone 6: Google OAuth & Multi-User Isolation', () => {
             lastError: data.lastError || null,
             processingOwner: data.processingOwner || null,
             leaseExpiresAt: data.leaseExpiresAt || null,
+            messageId: data.messageId || null,
+            previewUrl: data.previewUrl || null,
             createdAt: new Date(),
             updatedAt: new Date(),
           };
@@ -196,7 +199,57 @@ describe('Milestone 6: Google OAuth & Multi-User Isolation', () => {
     app = createApp();
   });
 
+  describe('Hosted deploy cookies (dashboard and API on different sites)', () => {
+    afterEach(() => {
+      delete process.env.ALLOW_DEV_LOGIN;
+      delete process.env.COOKIE_SAMESITE;
+      delete process.env.TRUST_PROXY;
+    });
+
+    it('issues a SameSite=None; Secure session cookie behind an https proxy', async () => {
+      process.env.ALLOW_DEV_LOGIN = 'true';
+      process.env.COOKIE_SAMESITE = 'none';
+      process.env.TRUST_PROXY = '1';
+      const hosted = createApp();
+      const res = await request(hosted).get('/auth/dev-login').set('X-Forwarded-Proto', 'https');
+      const cookie = String(res.headers['set-cookie']?.[0] ?? '');
+      expect(cookie).toContain('reachinbox.sid=');
+      expect(cookie).toMatch(/SameSite=None/i);
+      expect(cookie).toMatch(/Secure/i);
+    });
+  });
+
+  describe('Local dev sign-in (no Google keys)', () => {
+    afterEach(() => { delete process.env.ALLOW_DEV_LOGIN; });
+
+    it('is hidden unless ALLOW_DEV_LOGIN=true', async () => {
+      delete process.env.ALLOW_DEV_LOGIN;
+      const res = await request(app).get('/auth/dev-login');
+      expect(res.status).toBe(404);
+    });
+
+    it('signs in as the dev user from localhost and redirects to the dashboard', async () => {
+      process.env.ALLOW_DEV_LOGIN = 'true';
+      const agent = request.agent(app);
+      const res = await agent.get('/auth/dev-login');
+      expect(res.status).toBe(302);
+      const me = await agent.get('/auth/me');
+      expect(me.status).toBe(200);
+      expect(me.body.email).toBe('dev@reachinbox.local');
+    });
+  });
+
   describe('Google OAuth Flow & Endpoints', () => {
+    it('POST /auth/login — does not authenticate unverified email/password credentials', async () => {
+      const res = await request(app)
+        .post('/auth/login')
+        .send({ email: 'person@example.com', password: 'incorrect-or-unregistered' });
+
+      expect(res.status).toBe(501);
+      expect(res.body.error.message).toContain('Email and password sign-in is not configured');
+      expect(res.headers['set-cookie']).toBeUndefined();
+    });
+
     it('GET /auth/google — returns 503 if credentials are not configured', async () => {
       // With empty config.GOOGLE_CLIENT_ID
       const res = await request(app).get('/auth/google');

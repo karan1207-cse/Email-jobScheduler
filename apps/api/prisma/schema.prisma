@@ -54,9 +54,12 @@ model Email {
   recipient          String       @db.VarChar(320)
   subject            String       @db.VarChar(500)
   body               String       @db.Text
+  attachments        Json         @default("[]")
   status             EmailStatus  @default(DRAFT)
   scheduledTime      DateTime?    @map("scheduled_time")
   sentAt             DateTime?    @map("sent_at")
+  messageId          String?      @map("message_id") @db.VarChar(255)
+  previewUrl         String?      @map("preview_url") @db.Text
   idempotencyKey     String?      @map("idempotency_key") @db.VarChar(255)
   requestFingerprint String?      @map("request_fingerprint") @db.VarChar(64) // SHA-256 hash of payload
   attemptCount       Int          @default(0) @map("attempt_count")

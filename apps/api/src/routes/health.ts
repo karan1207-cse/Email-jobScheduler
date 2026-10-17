@@ -5,7 +5,7 @@ import { checkRedisHealth } from '../redis/client.js';
 
 export const healthRouter = Router();
 
-healthRouter.get('/health', async (_req: Request, res: Response<HealthCheckResponse>) => {
+const readinessHandler = async (_req: Request, res: Response<HealthCheckResponse>) => {
   const [databaseHealth, redisHealth] = await Promise.all([
     checkDatabaseHealth(),
     checkRedisHealth(),
@@ -26,4 +26,7 @@ healthRouter.get('/health', async (_req: Request, res: Response<HealthCheckRespo
   };
 
   res.status(statusCode).json(response);
-});
+};
+
+healthRouter.get('/health', readinessHandler);
+healthRouter.get('/ready', readinessHandler);

@@ -16,7 +16,10 @@ import {
   setMailTransporter,
   resetMailTransporter,
   getMailTransporter,
+  setMailerAccountCache,
+  ETHEREAL_ACCOUNT_KEY,
 } from '../mailer.js';
+import type { Redis } from 'ioredis';
 
 describe('SMTP Mailer Module (Milestone 5)', () => {
   let mockSendMail: ReturnType<typeof vi.fn>;
@@ -76,6 +79,27 @@ describe('SMTP Mailer Module (Milestone 5)', () => {
           html: '<h1>Title</h1>',
         })
       );
+    });
+
+    it('should attach the decoded file content to the SMTP message', async () => {
+      await sendEmail({
+        to: 'recipient@example.com',
+        subject: 'Attachment test',
+        html: '<p>See attached.</p>',
+        attachments: [{
+          filename: 'notes.txt',
+          contentType: 'text/plain',
+          contentBase64: Buffer.from('hello').toString('base64'),
+        }],
+      });
+
+      expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({
+        attachments: [{
+          filename: 'notes.txt',
+          contentType: 'text/plain',
+          content: Buffer.from('hello'),
+        }],
+      }));
     });
 
     it('should throw SmtpRecipientRejectedError when SMTP server rejects the recipient', async () => {
@@ -189,6 +213,99 @@ describe('SMTP Mailer Module (Milestone 5)', () => {
       consoleSpy.mockRestore();
       spyCreateAccount.mockRestore();
       spyCreateTransport.mockRestore();
+    });
+  });
+
+  describe('Ethereal inbox and sender identity', () => {
+    const account = {
+      user: 'shared_inbox@ethereal.email',
+      pass: 'pw',
+      smtp: { host: 'smtp.ethereal.email', port: 587, secure: false },
+      imap: { host: 'imap.ethereal.email', port: 993, secure: true },
+      pop3: { host: 'pop3.ethereal.email', port: 995, secure: true },
+      web: 'https://ethereal.email',
+    };
+
+    function memoryRedis(initial?: string) {
+      const store = new Map<string, string>(initial ? [[ETHEREAL_ACCOUNT_KEY, initial]] : []);
+      return {
+        store,
+        get: vi.fn(async (k: string) => store.get(k) ?? null),
+        set: vi.fn(async (k: string, v: string) => (store.has(k) ? null : (store.set(k, v), 'OK'))),
+        del: vi.fn(async (k: string) => (store.delete(k) ? 1 : 0)),
+      };
+    }
+
+    beforeEach(() => {
+      resetMailTransporter();
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(nodemailer, 'createTransport').mockReturnValue(mockTransporter);
+    });
+
+    afterEach(() => {
+      setMailerAccountCache(null);
+      vi.restoreAllMocks();
+    });
+
+    it('creates one Ethereal account for concurrent first sends and caches it in Redis', async () => {
+      const redis = memoryRedis();
+      setMailerAccountCache(redis as unknown as Redis);
+      const create = vi.spyOn(nodemailer, 'createTestAccount').mockResolvedValue(account);
+
+      await Promise.all([1, 2, 3, 4, 5].map(() => getMailTransporter()));
+
+      expect(create).toHaveBeenCalledOnce();
+      expect(JSON.parse(redis.store.get(ETHEREAL_ACCOUNT_KEY)!).user).toBe(account.user);
+    });
+
+    it('reuses the cached inbox after a worker restart instead of creating a new one', async () => {
+      const redis = memoryRedis(JSON.stringify({ user: account.user, pass: 'pw', smtp: account.smtp }));
+      setMailerAccountCache(redis as unknown as Redis);
+      const create = vi.spyOn(nodemailer, 'createTestAccount');
+
+      await getMailTransporter();
+
+      expect(create).not.toHaveBeenCalled();
+      expect(nodemailer.createTransport).toHaveBeenCalledWith(expect.objectContaining({
+        auth: { user: account.user, pass: 'pw' },
+      }));
+    });
+
+    it('sends From the sender on Ethereal, so each sender is visible in the inbox', async () => {
+      vi.spyOn(nodemailer, 'createTestAccount').mockResolvedValue(account);
+      await sendEmail({
+        to: 'recipient@example.com', subject: 's', html: '<p>x</p>',
+        sender: { email: 'alice@sender.test', name: 'Alice' },
+      });
+      expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({
+        from: { name: 'Alice', address: 'alice@sender.test' },
+        replyTo: undefined,
+      }));
+    });
+
+    it('keeps the relay From and puts the sender in Reply-To on a real SMTP relay', async () => {
+      setMailTransporter(mockTransporter);
+      await sendEmail({
+        to: 'recipient@example.com', subject: 's', html: '<p>x</p>',
+        sender: { email: 'alice@sender.test', name: null },
+      });
+      expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({
+        from: expect.any(String),
+        replyTo: { name: 'alice@sender.test', address: 'alice@sender.test' },
+      }));
+    });
+
+    it('drops an expired Ethereal inbox on EAUTH so the next attempt creates a fresh one', async () => {
+      const redis = memoryRedis();
+      setMailerAccountCache(redis as unknown as Redis);
+      const create = vi.spyOn(nodemailer, 'createTestAccount').mockResolvedValue(account);
+      mockSendMail.mockRejectedValueOnce(Object.assign(new Error('Invalid login'), { code: 'EAUTH' }));
+
+      await expect(sendEmail({ to: 'recipient@example.com', subject: 's', html: 'x' })).rejects.toThrow('Invalid login');
+      expect(redis.store.has(ETHEREAL_ACCOUNT_KEY)).toBe(false);
+
+      await sendEmail({ to: 'recipient@example.com', subject: 's', html: 'x' });
+      expect(create).toHaveBeenCalledTimes(2);
     });
   });
 });

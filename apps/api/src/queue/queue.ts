@@ -6,7 +6,8 @@ import { Queue } from 'bullmq';
 import { getRedisClient } from '../redis/client.js';
 import type { EmailJobData } from './types.js';
 
-export const EMAIL_QUEUE_NAME = 'email-jobs';
+// Must match the worker and dashboard, which read the same variable.
+export const EMAIL_QUEUE_NAME = process.env.EMAIL_QUEUE_NAME || 'email-jobs';
 
 let emailQueue: Queue<EmailJobData> | null = null;
 

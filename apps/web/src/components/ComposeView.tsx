@@ -33,16 +33,52 @@ export const ComposeView: React.FC<ComposeViewProps> = ({
     tomorrow.setMinutes(tomorrow.getMinutes() - tomorrow.getTimezoneOffset());
     return tomorrow.toISOString().slice(0, 16);
   });
-  const [isScheduledMode, setIsScheduledMode] = useState<boolean>(true);
+  const [isScheduledMode, setIsScheduledMode] = useState<boolean>(false);
 
   // Attachments
-  const [attachmentName, setAttachmentName] = useState<string | null>('Campaign_Preview.png');
+  const [attachments, setAttachments] = useState<Array<{ filename: string; contentType: string; size: number; contentBase64: string }>>([]);
 
   // Submission state
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
+
+  const handleAttachments = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    if (!files.length) return;
+    if (attachments.length + files.length > 5) {
+      setError('Attach up to 5 files per email.');
+      return;
+    }
+    const nextTotal = attachments.reduce((sum, file) => sum + file.size, 0) + files.reduce((sum, file) => sum + file.size, 0);
+    if (files.some((file) => file.size === 0 || file.size > 5 * 1024 * 1024) || nextTotal > 8 * 1024 * 1024) {
+      setError('Each attachment must be under 5 MB, with 8 MB total per email.');
+      return;
+    }
+
+    try {
+      const encoded = await Promise.all(files.map(async (file) => {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        }
+        return {
+          filename: file.name,
+          contentType: file.type || 'application/octet-stream',
+          size: file.size,
+          contentBase64: btoa(binary),
+        };
+      }));
+      setAttachments((current) => [...current, ...encoded]);
+      setError(null);
+    } catch {
+      setError('One or more files could not be read. Please try again.');
+    }
+  };
 
   // Quick schedule presets
   const handleQuickPreset = (preset: 'tomorrow' | '10am' | '11am' | '3pm') => {
@@ -83,9 +119,10 @@ export const ComposeView: React.FC<ComposeViewProps> = ({
   const handleSend = async () => {
     const targetRecipients = recipientList.length > 0
       ? recipientList
-      : recipient.split(/[,;\s]+/).filter((r) => r.includes('@'));
+      : recipient.split(/[,;\s]+/).map((r) => r.trim()).filter(Boolean);
 
-    if (targetRecipients.length === 0) {
+    const invalidRecipient = targetRecipients.find((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+    if (targetRecipients.length === 0 || invalidRecipient) {
       setError('Please provide at least one valid recipient email.');
       return;
     }
@@ -102,10 +139,23 @@ export const ComposeView: React.FC<ComposeViewProps> = ({
     setError(null);
 
     try {
-      const delayMs = Math.max(0, parseInt(delaySec, 10) || 0) * 1000;
-      const baseTime = isScheduledMode && selectedScheduleTime
-        ? new Date(selectedScheduleTime).getTime()
-        : Date.now() + 5000; // 5s immediate delay
+      const requestedDelaySec = Number(delaySec);
+      const requestedHourlyLimit = Number(hourlyLimit);
+      if (!Number.isInteger(requestedDelaySec) || requestedDelaySec < 0) {
+        throw new Error('Delay must be a whole number of seconds greater than or equal to zero.');
+      }
+      if (!Number.isInteger(requestedHourlyLimit) || requestedHourlyLimit < 0) {
+        throw new Error('Hourly limit must be a whole number greater than or equal to zero.');
+      }
+      const pacingDelayMs = requestedDelaySec * 1000;
+      const hourlyCapDelayMs = requestedHourlyLimit > 0
+        ? Math.ceil(3_600_000 / requestedHourlyLimit)
+        : 0;
+      const delayMs = Math.max(pacingDelayMs, hourlyCapDelayMs);
+      const baseTime = isScheduledMode ? new Date(selectedScheduleTime).getTime() : Date.now() + 3000;
+      if (!Number.isFinite(baseTime) || baseTime <= Date.now()) {
+        throw new Error('Choose a send time in the future.');
+      }
 
       for (let i = 0; i < targetRecipients.length; i++) {
         const to = targetRecipients[i]!;
@@ -113,6 +163,7 @@ export const ComposeView: React.FC<ComposeViewProps> = ({
           recipient: to,
           subject: subject.trim(),
           body: body.trim(),
+          attachments,
         });
 
         // Stagger dispatches according to pacing interval
@@ -148,14 +199,25 @@ export const ComposeView: React.FC<ComposeViewProps> = ({
           <button
             type="button"
             className="icon-action-btn with-badge"
-            onClick={() => setAttachmentName(attachmentName ? null : 'Tennis_Coach_Profile.png')}
+            onClick={() => attachmentInputRef.current?.click()}
             title="Attach files"
+            aria-label="Attach files"
+            aria-controls="compose-attachment-input"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6F767E" strokeWidth="2">
               <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
             </svg>
-            <span className="action-badge">{attachmentName ? '1' : '0'}</span>
+            <span className="action-badge">{attachments.length}</span>
           </button>
+          <input
+            ref={attachmentInputRef}
+            id="compose-attachment-input"
+            type="file"
+            multiple
+            onChange={(event) => void handleAttachments(event)}
+            className="visually-hidden"
+            aria-label="Choose email attachments"
+          />
 
           {/* Clock icon to toggle Send Later modal */}
           <button
@@ -179,7 +241,7 @@ export const ComposeView: React.FC<ComposeViewProps> = ({
             disabled={submitting}
             id="compose-send-btn"
           >
-            {submitting ? 'Scheduling...' : isScheduledMode ? 'Send Later' : 'Send'}
+            {submitting ? 'Sending...' : isScheduledMode ? 'Schedule Send' : 'Send'}
           </button>
         </div>
       </div>
@@ -192,6 +254,13 @@ export const ComposeView: React.FC<ComposeViewProps> = ({
           </div>
 
           <div className="popover-body">
+            <button
+              type="button"
+              className="send-now-option"
+              onClick={() => { setIsScheduledMode(false); setSendLaterOpen(false); }}
+            >
+              Send immediately
+            </button>
             <label className="popover-input-label">Pick date &amp; time</label>
             <div className="popover-input-wrapper">
               <input
@@ -274,7 +343,7 @@ export const ComposeView: React.FC<ComposeViewProps> = ({
         <div className="compose-row">
           <label className="compose-label">From</label>
           <div className="compose-from-pill">
-            <span>{currentUser.email || 'oliver.brown@domain.io'}</span>
+            <span>{currentUser.email}</span>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polyline points="6 9 12 15 18 9" />
             </svg>
@@ -290,7 +359,11 @@ export const ComposeView: React.FC<ComposeViewProps> = ({
               className="compose-input"
               placeholder="recipient@example.com"
               value={recipient}
-              onChange={(e) => setRecipient(e.target.value)}
+              onChange={(e) => {
+                setRecipient(e.target.value);
+                setRecipientList([]);
+                setFileName(null);
+              }}
               id="compose-to-input"
             />
             {recipientList.length > 0 && (
@@ -409,23 +482,25 @@ export const ComposeView: React.FC<ComposeViewProps> = ({
           />
 
           {/* Attachment card preview at bottom if attached */}
-          {attachmentName && (
+          {attachments.length > 0 && (
             <div className="compose-attachment-preview">
-              <div className="attachment-chip">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#00A859" strokeWidth="2">
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                  <circle cx="8.5" cy="8.5" r="1.5" />
-                  <polyline points="21 15 16 10 5 21" />
-                </svg>
-                <span>{attachmentName}</span>
-                <button
-                  type="button"
-                  className="remove-chip-btn"
-                  onClick={() => setAttachmentName(null)}
-                >
-                  &times;
-                </button>
-              </div>
+              {attachments.map((attachment, index) => (
+                <div className="attachment-chip" key={`${attachment.filename}-${index}`}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#00A859" strokeWidth="2" aria-hidden="true">
+                    <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                  <span>{attachment.filename}</span>
+                  <span className="attachment-file-size">{(attachment.size / 1024).toFixed(0)} KB</span>
+                  <button
+                    type="button"
+                    className="remove-chip-btn"
+                    aria-label={`Remove ${attachment.filename}`}
+                    onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                  >
+                    &times;
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>

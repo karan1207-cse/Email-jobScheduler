@@ -5,7 +5,7 @@ import { closeDatabasePool } from './db/client.js';
 import { closeRedisClient } from './redis/client.js';
 import { closePrismaClient } from './db/prisma.js';
 import { closeEmailQueue } from './queue/queue.js';
-import { recoverPendingOutboxEvents } from './services/scheduler.service.js';
+import { recoverPendingOutboxEvents, reconcileScheduledEmails } from './services/scheduler.service.js';
 
 const app = createApp();
 
@@ -14,14 +14,18 @@ let isShuttingDown = false;
 
 async function startServer(): Promise<void> {
   try {
-    server = app.listen(config.PORT, () => {
+    // HOST is optional (default: all interfaces). Set e.g. HOST=::1 to share a
+    // port with another local process bound only to 127.0.0.1.
+    const host = process.env.HOST?.trim();
+    const onListening = () => {
       console.log(`=======================================================`);
       console.log(`🚀 ReachInbox API Server running on port ${config.PORT}`);
       console.log(`📍 Environment: ${config.NODE_ENV}`);
       console.log(`📡 Root URL:    http://localhost:${config.PORT}/`);
       console.log(`🩺 Health URL:  http://localhost:${config.PORT}/health`);
       console.log(`=======================================================`);
-    });
+    };
+    server = host ? app.listen(config.PORT, host, onListening) : app.listen(config.PORT, onListening);
 
     server.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
@@ -33,10 +37,12 @@ async function startServer(): Promise<void> {
     });
 
     // Run outbox recovery after server is up (non-blocking)
-    recoverPendingOutboxEvents().catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn('[OutboxRecovery] Startup recovery failed (non-fatal):', msg);
-    });
+    recoverPendingOutboxEvents()
+      .then(() => reconcileScheduledEmails())
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('[OutboxRecovery] Startup recovery failed (non-fatal):', msg);
+      });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error('[Fatal Startup Error]:', msg);

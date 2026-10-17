@@ -554,6 +554,46 @@ body {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  position: relative;
+}
+
+.email-filter-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.5rem);
+  right: 2rem;
+  width: 12rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.75rem;
+  background: var(--bg-card, #fff);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+}
+
+.email-filter-heading {
+  display: block;
+  padding: 0.4rem 0.6rem 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.email-filter-option {
+  display: block;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 0;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.email-filter-option:hover,
+.email-filter-option.selected {
+  background: var(--bg-input, #f3f4f6);
 }
 
 .icon-btn {
@@ -641,6 +681,29 @@ body {
   font-size: 0.78rem;
   font-weight: 600;
   flex-shrink: 0;
+}
+
+.badge-status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid var(--border-light);
+  border-radius: 9999px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.badge-status-pill.status-sent {
+  background-color: var(--sent-badge-bg);
+  border-color: var(--sent-badge-border);
+  color: var(--sent-badge-text);
+}
+
+.badge-status-pill.status-failed {
+  color: #b42318;
 }
 
 .email-row-subject {
@@ -1358,3 +1421,303 @@ body {
 .remove-chip-btn:hover {
   color: var(--danger);
 }
+
+.send-now-option {
+  width: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  color: var(--brand-green-text);
+  background: var(--brand-green-subtle);
+  text-align: left;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.send-now-option:hover {
+  border-color: var(--brand-green);
+}
+
+.attachment-file-size {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.compose-attachment-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Slack notification settings */
+.slack-settings-card {
+  width: min(100%, 820px);
+  margin: 0 auto;
+  padding: 1.5rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+}
+
+.slack-header,
+.slack-brand,
+.slack-status-pill,
+.slack-actions-row {
+  display: flex;
+  align-items: center;
+}
+
+.slack-header {
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.slack-brand {
+  min-width: 0;
+  gap: 0.9rem;
+}
+
+.slack-brand h3 {
+  margin: 0 0 0.3rem;
+  color: var(--text-primary);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.slack-brand .section-desc {
+  display: block;
+  line-height: 1.45;
+}
+
+.slack-status-pill {
+  flex-shrink: 0;
+}
+
+.slack-status-pill .status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.slack-status-pill .status-pill::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+}
+
+.slack-status-pill .status-pill.healthy {
+  color: #087443;
+  background: #edfaf3;
+  border-color: #c8ead7;
+}
+
+.slack-status-pill .status-pill.unhealthy {
+  color: #9a4a12;
+  background: #fff7ed;
+  border-color: #f2dfc8;
+}
+
+.slack-body {
+  padding-top: 1.25rem;
+}
+
+.slack-meta-box {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.slack-meta-box .meta-item {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-input);
+}
+
+.slack-meta-box .meta-label {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.slack-meta-box .meta-val {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.slack-actions-row {
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+.slack-actions-row button {
+  min-height: 38px;
+}
+
+.slack-disconnected-view .slack-intro {
+  max-width: 600px;
+  margin: 0 0 1rem;
+  line-height: 1.55;
+}
+
+.slack-setup-note {
+  margin: 0.8rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.slack-feedback {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  line-height: 1.45;
+}
+
+.slack-feedback-success {
+  color: #087443;
+  background: #edfaf3;
+  border-color: #c8ead7;
+}
+
+.slack-feedback-error {
+  color: #a43232;
+  background: #fff1f0;
+  border-color: #f3ceca;
+}
+
+.slack-feedback .btn-alert-dismiss {
+  flex: 0 0 auto;
+}
+
+.webhook-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem 1rem;
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-input);
+}
+
+.webhook-form-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  grid-column: 1 / -1;
+  color: var(--text-primary);
+}
+
+.webhook-form-heading span {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.webhook-form .form-group {
+  min-width: 0;
+  margin: 0;
+}
+
+.webhook-form button[type='submit'] {
+  justify-self: start;
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 680px) {
+  .slack-settings-card {
+    padding: 1rem;
+  }
+
+  .slack-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .slack-meta-box {
+    grid-template-columns: 1fr;
+  }
+
+  .webhook-form {
+    grid-template-columns: 1fr;
+  }
+
+  .figma-compose-top-bar {
+    padding: 1rem;
+  }
+
+  .figma-compose-form {
+    padding: 1rem;
+  }
+
+  .compose-row,
+  .compose-input-wrapper {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .compose-label {
+    width: auto;
+  }
+
+  .figma-send-later-popover {
+    right: 1rem;
+    left: 1rem;
+    width: auto;
+  }
+}
+
+/* Delivery details (Ethereal preview link, SMTP Message-ID, last error) */
+.delivery-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 20px;
+  padding: 12px 14px;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.ethereal-preview-link { color: #00A859; font-weight: 600; text-decoration: none; }
+.ethereal-preview-link:hover { text-decoration: underline; }
+.delivery-message-id { color: #6B7280; word-break: break-all; }
+.delivery-error { color: #B91C1C; word-break: break-word; }

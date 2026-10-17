@@ -72,6 +72,7 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
             recipient: data.recipient,
             subject: data.subject,
             body: data.body,
+            attachments: data.attachments || [],
             status: data.status || 'DRAFT',
             scheduledTime: data.scheduledTime || null,
             sentAt: data.sentAt || null,
@@ -81,6 +82,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
             lastError: data.lastError || null,
             processingOwner: data.processingOwner || null,
             leaseExpiresAt: data.leaseExpiresAt || null,
+            messageId: data.messageId || null,
+            previewUrl: data.previewUrl || null,
             createdAt: new Date(),
             updatedAt: new Date(),
           };
@@ -162,6 +165,51 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
       expect(res.body.body).toBe('Hello Alice, your account is ready.');
       expect(res.body.status).toBe('DRAFT');
       expect(res.body.userId).toBe(DEV_DEFAULT_USER.id);
+    });
+
+    it('should persist attachment bytes and return metadata without base64 content', async () => {
+      const attachment = {
+        filename: 'notes.txt',
+        contentType: 'text/plain',
+        size: 5,
+        contentBase64: Buffer.from('hello').toString('base64'),
+      };
+      const res = await request(app)
+        .post('/api/emails')
+        .send({
+          recipient: 'alice@example.com',
+          subject: 'With attachment',
+          body: 'See attached.',
+          attachments: [attachment],
+        });
+
+      expect(res.status).toBe(201);
+      expect(emailsStore[0]?.attachments).toEqual([attachment]);
+      expect(res.body.attachments).toEqual([{
+        filename: 'notes.txt',
+        contentType: 'text/plain',
+        size: 5,
+      }]);
+      expect(JSON.stringify(res.body.attachments)).not.toContain('contentBase64');
+    });
+
+    it('should reject attachment content whose declared size does not match', async () => {
+      const res = await request(app)
+        .post('/api/emails')
+        .send({
+          recipient: 'alice@example.com',
+          subject: 'Invalid attachment',
+          body: 'Body',
+          attachments: [{
+            filename: 'notes.txt',
+            contentType: 'text/plain',
+            size: 6,
+            contentBase64: Buffer.from('hello').toString('base64'),
+          }],
+        });
+
+      expect(res.status).toBe(400);
+      expect(emailsStore).toHaveLength(0);
     });
 
     it('should reject invalid recipient email format with HTTP 400', async () => {
@@ -274,6 +322,7 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
           recipient: `recipient${i}@example.com`,
           subject: `Email ${i}`,
           body: `Content ${i}`,
+          attachments: [],
           status: i % 2 === 0 ? 'SCHEDULED' : 'DRAFT',
           scheduledTime: null,
           sentAt: null,
@@ -283,6 +332,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
           lastError: null,
           processingOwner: null,
           leaseExpiresAt: null,
+          messageId: null,
+          previewUrl: null,
           createdAt: new Date(Date.now() - i * 1000),
           updatedAt: new Date(),
         });
@@ -320,6 +371,7 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         recipient: 'test@example.com',
         subject: 'Single Email Test',
         body: 'Body content',
+        attachments: [],
         status: 'DRAFT',
         scheduledTime: null,
         sentAt: null,
@@ -329,6 +381,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         lastError: null,
         processingOwner: null,
         leaseExpiresAt: null,
+        messageId: null,
+        previewUrl: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -369,6 +423,7 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         recipient: 'draft@example.com',
         subject: 'Original Subject',
         body: 'Original Body',
+        attachments: [],
         status: 'DRAFT',
         scheduledTime: null,
         sentAt: null,
@@ -378,6 +433,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         lastError: null,
         processingOwner: null,
         leaseExpiresAt: null,
+        messageId: null,
+        previewUrl: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -388,6 +445,7 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         recipient: 'sent@example.com',
         subject: 'Sent Subject',
         body: 'Sent Body',
+        attachments: [],
         status: 'SENT',
         scheduledTime: null,
         sentAt: new Date(),
@@ -397,6 +455,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         lastError: null,
         processingOwner: null,
         leaseExpiresAt: null,
+        messageId: null,
+        previewUrl: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -441,6 +501,7 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         recipient: 'draft@example.com',
         subject: 'Draft to delete',
         body: 'Will be deleted',
+        attachments: [],
         status: 'DRAFT',
         scheduledTime: null,
         sentAt: null,
@@ -450,6 +511,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         lastError: null,
         processingOwner: null,
         leaseExpiresAt: null,
+        messageId: null,
+        previewUrl: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -460,6 +523,7 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         recipient: 'scheduled@example.com',
         subject: 'Scheduled Email',
         body: 'Cannot delete',
+        attachments: [],
         status: 'SCHEDULED',
         scheduledTime: new Date(Date.now() + 3600000),
         sentAt: null,
@@ -469,6 +533,8 @@ describe('ReachInbox Email API & Idempotency (Milestone 2)', () => {
         lastError: null,
         processingOwner: null,
         leaseExpiresAt: null,
+        messageId: null,
+        previewUrl: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });

@@ -7,6 +7,7 @@ import {
   searchEmailsApi,
   fetchApiHealth,
   fetchApiRoot,
+  API_BASE_URL,
   type AuthUser,
 } from './api.js';
 import { LoginScreen } from './components/LoginScreen.js';
@@ -237,7 +238,7 @@ export const App: React.FC = () => {
               loading={false}
               onRefresh={fetchTelemetry}
               lastChecked={lastChecked}
-              apiBaseUrl="http://localhost:5000"
+              apiBaseUrl={API_BASE_URL}
             />
           </div>
         ) : (

@@ -30,6 +30,9 @@ function mapToDto(email: Email): EmailDto {
   };
 }
 
+/** How far in the past a requested send time may be and still mean "send now". */
+const SEND_NOW_GRACE_MS = 30_000;
+
 export interface ScheduleEmailInput {
   scheduledTime: string; // ISO-8601 date string
 }
@@ -48,12 +51,17 @@ export async function scheduleEmail(
     await ensureDevUser();
   }
 
-  const scheduledAt = new Date(input.scheduledTime);
+  const requestedAt = new Date(input.scheduledTime);
   const now = new Date();
 
-  if (scheduledAt <= now) {
+  // "Send now" from the dashboard asks for a time a few seconds ahead, which
+  // can already have passed by the time the request lands (slow network, a
+  // slightly fast server clock). Treat a time up to SEND_NOW_GRACE_MS in the
+  // past as "send immediately"; anything older is still rejected.
+  if (requestedAt.getTime() < now.getTime() - SEND_NOW_GRACE_MS) {
     throw new ConflictError('scheduledTime must be a future date/time.');
   }
+  const scheduledAt = requestedAt > now ? requestedAt : now;
 
   const delayMs = scheduledAt.getTime() - now.getTime();
 

@@ -141,6 +141,20 @@ describe('Scheduler Service — scheduleEmail', () => {
       expect.objectContaining({ data: expect.objectContaining({ status: 'PROCESSED' }) })
     );
   });
+
+  it('treats a send time a few seconds in the past as send now', async () => {
+    const { prisma, tx } = buildMockPrisma();
+    (getPrismaClient as MockedFunction<typeof getPrismaClient>).mockReturnValue(prisma as never);
+
+    const before = Date.now();
+    const justPassed = new Date(before - 2000).toISOString();
+    const result = await scheduleEmail('email-uuid-1', { scheduledTime: justPassed });
+
+    expect(result.status).toBe('SCHEDULED');
+    // The stored send time is moved up to "now" rather than left in the past.
+    const stored = tx.email.update.mock.calls[0]?.[0]?.data?.scheduledTime as Date;
+    expect(stored.getTime()).toBeGreaterThanOrEqual(before);
+  });
 });
 
 describe('Scheduler Service — cancelScheduledEmail', () => {

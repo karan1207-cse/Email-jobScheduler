@@ -13,7 +13,7 @@
  */
 
 import { Client } from '@elastic/elasticsearch';
-import type { Email } from '@prisma/client';
+import type { Email, Prisma } from '@prisma/client';
 import { getPrismaClient } from '../db/prisma.js';
 
 // ---------------------------------------------------------------------------
@@ -30,6 +30,8 @@ export function getEsClient(): Client {
   if (!esClient) {
     esClient = new Client({
       node: getEsUrl(),
+      maxRetries: 1,
+      requestTimeout: 2000,
       // In development, ignore self-signed cert errors if using HTTPS locally
       tls: process.env.ELASTICSEARCH_TLS_REJECT_UNAUTHORIZED === 'false'
         ? { rejectUnauthorized: false }
@@ -309,13 +311,13 @@ async function postgresSearchFallback(params: SearchEmailsParams): Promise<Searc
 
   const [records, total] = await Promise.all([
     prisma.email.findMany({
-      where:   where as Parameters<typeof prisma.email.findMany>[0]['where'],
+      where:   where as Prisma.EmailWhereInput,
       skip,
       take:    safeLimit,
       orderBy: { createdAt: 'desc' },
     }),
     prisma.email.count({
-      where: where as Parameters<typeof prisma.email.count>[0]['where'],
+      where: where as Prisma.EmailWhereInput,
     }),
   ]);
 

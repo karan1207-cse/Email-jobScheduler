@@ -16,7 +16,7 @@ import { ExpressAdapter }  from '@bull-board/express';
 import { Queue }           from 'bullmq';
 import { Router, type Request, type Response, type NextFunction } from 'express';
 
-const EMAIL_QUEUE_NAME = process.env.EMAIL_QUEUE_NAME || 'email-queue';
+const EMAIL_QUEUE_NAME = process.env.EMAIL_QUEUE_NAME || 'email-jobs';
 const REDIS_URL        = process.env.REDIS_URL        || 'redis://localhost:6379';
 const NODE_ENV         = process.env.NODE_ENV         || 'development';
 export const DASHBOARD_BASE_PATH = '/admin/queues';

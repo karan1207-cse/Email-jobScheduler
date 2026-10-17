@@ -119,3 +119,23 @@ npm test
 | Search returns `postgres_fallback` | Elasticsearch is not reachable; check `docker compose ps` |
 | Dashboard returns 403 | In dev, access from `127.0.0.1`. In prod, set `ADMIN_TOKEN` |
 | Tests fail with Prisma errors | Run `npm run prisma:generate --workspace=apps/api` |
+
+## Full application in Docker Desktop (Windows)
+
+The root `docker-compose.yml` starts PostgreSQL, Redis, Elasticsearch, the Express API, one BullMQ email worker, and the Vite frontend. The three app images use the root npm workspace/lockfile. The API runs `prisma migrate deploy` at startup. The API health check waits for PostgreSQL and Redis; the worker and frontend start after the API is healthy.
+
+Prerequisites: Docker Desktop with its Linux engine running, WSL 2, and (when using Ubuntu) Docker Desktop WSL integration enabled for that distribution. From PowerShell in the repository:
+
+```powershell
+Copy-Item .env.example .env
+docker compose config --quiet
+docker compose up --build -d
+docker compose ps
+docker compose logs -f
+```
+
+Visit `http://localhost:5173`; API health is `http://localhost:5000/health`. Stop with `docker compose down`. Named volumes preserve Postgres, Redis, and Elasticsearch data across that command. Avoid `docker compose down --volumes` unless data deletion is intended.
+
+For local email testing, leave all SMTP variables blank. In development, the worker provisions an Ethereal test account and logs a web preview URL; Ethereal captures test messages instead of delivering to real recipients. Set `SMTP_HOST`, `SMTP_USER`, and `SMTP_PASS` together only when you intentionally configure an SMTP relay. Never commit `.env` or put secrets in `.env.example`. See the README's Docker section and `docs/ENVIRONMENT_SETUP.md` for variable descriptions.
+
+This Compose setup runs in development mode. OAuth credentials are optional for the development-user fallback. It uses unauthenticated development Elasticsearch and a development-only session secret, so it is not a production deployment template.

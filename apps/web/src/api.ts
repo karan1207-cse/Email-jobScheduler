@@ -61,6 +61,26 @@ export async function fetchCurrentUser(): Promise<AuthUser | null> {
   }
 }
 
+export async function loginWithEmail(email: string, password?: string): Promise<AuthUser> {
+  const response = await fetch(`${API_BASE_URL}/auth/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    credentials: 'include',
+    body: JSON.stringify({ email, password }),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    throw new Error(errBody?.error?.message || `Login failed (HTTP ${response.status})`);
+  }
+
+  const data = await response.json();
+  return data.user as AuthUser;
+}
+
 export async function logoutUser(): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/auth/logout`, {
     method: 'POST',
@@ -71,6 +91,38 @@ export async function logoutUser(): Promise<void> {
     throw new Error(`Logout failed (HTTP ${response.status})`);
   }
 }
+
+export async function searchEmailsApi(
+  q?: string,
+  status?: string,
+  page: number = 1,
+  limit: number = 20
+): Promise<PaginatedResponse<EmailDto>> {
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
+  if (q && q.trim()) {
+    params.append('q', q.trim());
+  }
+  if (status && status !== 'ALL') {
+    params.append('status', status);
+  }
+
+  const response = await fetch(`${API_BASE_URL}/api/search/emails?${params.toString()}`, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    // If Elasticsearch route is unavailable, fallback to listEmails
+    return listEmails(page, limit, status);
+  }
+
+  return response.json() as Promise<PaginatedResponse<EmailDto>>;
+}
+
 
 /**
  * Email Operations

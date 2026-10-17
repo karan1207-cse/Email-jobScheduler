@@ -51,3 +51,13 @@ This document provides a comprehensive reference for all configuration variables
 2. **`ADMIN_TOKEN`**: Required in non-local production deployments. The queue dashboard (`/admin/queues`) and index rebuild endpoint (`/api/search/rebuild`) will reject external requests with `403 Forbidden` unless authorized with `X-Admin-Token: <token>`.
 3. **SMTP Credentials**: When running in production, always provide dedicated SMTP relay credentials (SendGrid, Postmark, AWS SES, or corporate SMTP). If left blank, the worker falls back to creating transient Ethereal test accounts.
 4. **Elasticsearch Security**: For production, deploy Elasticsearch with TLS enabled and specify authenticated URLs (`http://elastic:password@host:9200`).
+
+## Docker Desktop services
+
+Compose builds the API, worker, and Vite frontend from the npm workspace root using `Dockerfile.api`, `Dockerfile.worker`, and `Dockerfile.web`. PostgreSQL and Redis health checks gate API startup; the API's `/health` check gates the worker and frontend. Elasticsearch remains an optional search dependency, consistent with the API's PostgreSQL fallback. A single worker instance runs by default; scale workers only when additional consumer concurrency is intended.
+
+The web UI is `http://localhost:5173`; the API is `http://localhost:5000`. Use `docker compose config --quiet`, `docker compose up --build -d`, `docker compose ps`, and `docker compose logs -f` to validate, launch, inspect, and follow logs. Use `docker compose down` to stop; named data volumes remain. Do not pass `--volumes` if you need to preserve data.
+
+With blank SMTP settings in development, the worker uses Ethereal test mail and provides preview links; this does not send messages to real recipients. Tests use mocked transports. Do not configure a real SMTP relay for test runs.
+
+The in-container development defaults are provided by Compose. For external SMTP, set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, and optionally `SMTP_FROM` in `.env`; the three credential fields must be set together. Configure Google/Slack OAuth secrets only when enabling those integrations. `.env` is ignored by Git; `.env.example` contains placeholders/defaults only.

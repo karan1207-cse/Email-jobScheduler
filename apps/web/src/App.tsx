@@ -1,36 +1,48 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { HealthCheckResponse, ApiRootResponse, EmailDto } from '@reachinbox/shared';
+import type { EmailDto, HealthCheckResponse, ApiRootResponse } from '@reachinbox/shared';
 import {
-  API_BASE_URL,
   fetchCurrentUser,
   logoutUser,
+  listEmails,
+  searchEmailsApi,
   fetchApiHealth,
   fetchApiRoot,
   type AuthUser,
 } from './api.js';
-import { Navbar, type ActiveTab } from './components/Navbar.js';
-import { ComposeCampaign } from './components/ComposeCampaign.js';
-import { EmailList } from './components/EmailList.js';
-import { EmailDetailModal } from './components/EmailDetailModal.js';
-import { HealthTelemetry } from './components/HealthTelemetry.js';
+import { LoginScreen } from './components/LoginScreen.js';
+import { Sidebar, type DashboardTab } from './components/Sidebar.js';
+import { EmailListView } from './components/EmailListView.js';
+import { EmailDetailView } from './components/EmailDetailView.js';
+import { ComposeView } from './components/ComposeView.js';
 import { SlackSettings } from './components/SlackSettings.js';
-import { Footer } from './components/Footer.js';
+import { HealthTelemetry } from './components/HealthTelemetry.js';
 
 export const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [loadingAuth, setLoadingAuth] = useState<boolean>(true);
+  const [authBanner, setAuthBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Dashboard view state
+  const [currentTab, setCurrentTab] = useState<DashboardTab>('scheduled');
+  const [isComposeActive, setIsComposeActive] = useState<boolean>(false);
   const [selectedEmail, setSelectedEmail] = useState<EmailDto | null>(null);
 
-  // Health and telemetry state
-  const [loadingHealth, setLoadingHealth] = useState<boolean>(true);
+  // Email list state
+  const [emails, setEmails] = useState<EmailDto[]>([]);
+  const [loadingEmails, setLoadingEmails] = useState<boolean>(false);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [scheduledCount, setScheduledCount] = useState<number>(0);
+  const [sentCount, setSentCount] = useState<number>(0);
+
+  // Telemetry state
   const [healthData, setHealthData] = useState<HealthCheckResponse | null>(null);
   const [rootData, setRootData] = useState<ApiRootResponse | null>(null);
   const [httpStatus, setHttpStatus] = useState<number | null>(null);
   const [lastChecked, setLastChecked] = useState<string | null>(null);
-  const [authBanner, setAuthBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  // Load authenticated user and check URL query params for OAuth return
+  // 1. Initial auth check
   const checkAuth = useCallback(async () => {
+    setLoadingAuth(true);
     const params = new URLSearchParams(window.location.search);
     const authSuccess = params.get('auth_success');
     const authError = params.get('auth_error');
@@ -43,22 +55,48 @@ export const App: React.FC = () => {
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
-    const currentUser = await fetchCurrentUser();
-    setUser(currentUser);
+    try {
+      const currentUser = await fetchCurrentUser();
+      setUser(currentUser);
+    } catch {
+      setUser(null);
+    } finally {
+      setLoadingAuth(false);
+    }
   }, []);
 
-  const handleLogout = async () => {
-    try {
-      await logoutUser();
-      setUser(null);
-      setAuthBanner({ type: 'success', message: 'Signed out successfully.' });
-    } catch (err) {
-      console.error('Logout error:', err);
-    }
-  };
+  // 2. Fetch email lists and count statistics
+  const fetchDashboardData = useCallback(async () => {
+    if (!user) return;
+    setLoadingEmails(true);
 
-  const fetchHealthTelemetry = useCallback(async () => {
-    setLoadingHealth(true);
+    try {
+      const filterStatus = currentTab === 'scheduled' ? 'SCHEDULED' : currentTab === 'sent' ? 'SENT' : undefined;
+
+      // If search query is present, call searchEmailsApi; otherwise listEmails
+      const res = searchQuery.trim()
+        ? await searchEmailsApi(searchQuery.trim(), filterStatus)
+        : await listEmails(1, 50, filterStatus);
+
+      setEmails(res.data);
+
+      // Fetch counts for both tabs concurrently
+      const [scheduledRes, sentRes] = await Promise.all([
+        listEmails(1, 1, 'SCHEDULED').catch(() => null),
+        listEmails(1, 1, 'SENT').catch(() => null),
+      ]);
+
+      if (scheduledRes) setScheduledCount(scheduledRes.pagination.total);
+      if (sentRes) setSentCount(sentRes.pagination.total);
+    } catch (err) {
+      console.error('[Dashboard] Error fetching email data:', err);
+    } finally {
+      setLoadingEmails(false);
+    }
+  }, [user, currentTab, searchQuery]);
+
+  // 3. Fetch system telemetry
+  const fetchTelemetry = useCallback(async () => {
     try {
       const [h, r] = await Promise.all([
         fetchApiHealth().catch(() => null),
@@ -68,130 +106,143 @@ export const App: React.FC = () => {
       setRootData(r);
       setHttpStatus(h ? 200 : 503);
       setLastChecked(new Date().toLocaleTimeString());
-    } finally {
-      setLoadingHealth(false);
+    } catch {
+      setHttpStatus(503);
     }
   }, []);
 
   useEffect(() => {
     checkAuth();
-    fetchHealthTelemetry();
-  }, [checkAuth, fetchHealthTelemetry]);
+  }, [checkAuth]);
 
+  useEffect(() => {
+    if (user) {
+      fetchDashboardData();
+      fetchTelemetry();
+    }
+  }, [user, fetchDashboardData, fetchTelemetry]);
+
+  // Handle logout
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+    } catch (err) {
+      console.warn('Logout warning:', err);
+    }
+    setUser(null);
+    setSelectedEmail(null);
+    setIsComposeActive(false);
+    setAuthBanner({ type: 'success', message: 'You have been signed out.' });
+  };
+
+  // If loading auth state
+  if (loadingAuth) {
+    return (
+      <div className="figma-login-wrapper">
+        <div className="figma-spinner"></div>
+      </div>
+    );
+  }
+
+  // 1️⃣ NOT LOGGED IN -> Show Figma Login Screen
+  if (!user) {
+    return (
+      <LoginScreen
+        onLoginSuccess={(loggedInUser) => {
+          setUser(loggedInUser);
+          setAuthBanner({ type: 'success', message: `Welcome back, ${loggedInUser.displayName}!` });
+        }}
+        authError={authBanner?.type === 'error' ? authBanner.message : null}
+      />
+    );
+  }
+
+  // 2️⃣ LOGGED IN -> Show Figma Main Dashboard
   return (
-    <div className="app-container">
-      {/* Top Navbar */}
-      <Navbar
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
+    <div className="figma-dashboard-layout">
+      {/* Left Sidebar */}
+      <Sidebar
+        currentTab={currentTab}
+        onTabChange={(tab) => {
+          setCurrentTab(tab);
+          setSelectedEmail(null);
+          setIsComposeActive(false);
+        }}
+        onComposeClick={() => {
+          setIsComposeActive(true);
+          setSelectedEmail(null);
+        }}
         user={user}
         onLogout={handleLogout}
-        isHealthy={healthData?.status === 'healthy'}
+        scheduledCount={scheduledCount}
+        sentCount={sentCount}
+        isComposeActive={isComposeActive}
       />
 
-      {/* Auth Banner if returned from OAuth */}
-      {authBanner && (
-        <div className={`alert-box alert-${authBanner.type === 'success' ? 'success' : 'danger'}`}>
-          <span>{authBanner.message}</span>
-          <button className="btn-alert-dismiss" onClick={() => setAuthBanner(null)}>
-            &times;
-          </button>
-        </div>
-      )}
+      {/* Main Content Area */}
+      <main className="figma-main-content">
+        {/* Top Banner Alert (e.g. OAuth Success) */}
+        {authBanner && (
+          <div className={`figma-top-alert alert-${authBanner.type}`}>
+            <span>{authBanner.message}</span>
+            <button
+              type="button"
+              className="figma-error-close"
+              onClick={() => setAuthBanner(null)}
+            >
+              &times;
+            </button>
+          </div>
+        )}
 
-      {/* Main Tab Content */}
-      <main className="tab-main-content">
-        {activeTab === 'overview' && (
-          <div className="overview-tab-view">
-            {/* Hero Quick-Action Banner */}
-            <div className="hero-banner">
-              <div className="hero-text">
-                <span className="hero-tag">ReachInbox Email Job Scheduler</span>
-                <h1>Distributed Delayed Email Delivery Engine</h1>
-                <p>
-                  High-throughput, reliable email scheduling platform with transactional outbox, BullMQ delayed
-                  queues, distributed rate limiting, and atomic SMTP concurrency.
-                </p>
-                <div className="hero-buttons">
-                  <button className="btn btn-primary" onClick={() => setActiveTab('compose')}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <line x1="12" y1="5" x2="12" y2="19" />
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
-                    Schedule New Campaign
-                  </button>
-                  <button className="btn btn-secondary" onClick={() => setActiveTab('scheduled')}>
-                    View Scheduled Deliveries &rarr;
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Live Telemetry Monitor */}
+        {/* View Switcher */}
+        {isComposeActive ? (
+          <ComposeView
+            onBack={() => setIsComposeActive(false)}
+            onSuccess={() => {
+              setIsComposeActive(false);
+              setCurrentTab('scheduled');
+              fetchDashboardData();
+            }}
+            currentUser={user}
+          />
+        ) : selectedEmail ? (
+          <EmailDetailView
+            email={selectedEmail}
+            onBack={() => setSelectedEmail(null)}
+            currentUser={user}
+            onEmailUpdated={() => {
+              fetchDashboardData();
+            }}
+          />
+        ) : currentTab === 'slack' ? (
+          <div style={{ padding: '2rem' }}>
+            <SlackSettings />
+          </div>
+        ) : currentTab === 'health' ? (
+          <div style={{ padding: '2rem' }}>
             <HealthTelemetry
               healthData={healthData}
               rootData={rootData}
               httpStatus={httpStatus}
-              loading={loadingHealth}
-              onRefresh={fetchHealthTelemetry}
+              loading={false}
+              onRefresh={fetchTelemetry}
               lastChecked={lastChecked}
-              apiBaseUrl={API_BASE_URL}
+              apiBaseUrl="http://localhost:5000"
             />
-
-            {/* Slack Alerting Settings */}
-            <div style={{ marginTop: '2rem' }}>
-              <SlackSettings />
-            </div>
-
-            {/* Recent Scheduled Emails Quick Table */}
-            <div style={{ marginTop: '2.5rem' }}>
-              <EmailList
-                initialStatus="SCHEDULED"
-                title="Upcoming Scheduled Deliveries"
-                description="Live queues pending dispatch across BullMQ delayed workers."
-                onSelectEmail={setSelectedEmail}
-              />
-            </div>
           </div>
-        )}
-
-        {activeTab === 'scheduled' && (
-          <EmailList
-            initialStatus="SCHEDULED"
-            title="Scheduled Email Queue"
-            description="Emails scheduled for future delivery. You can cancel any job before it is picked up by a worker."
+        ) : (
+          <EmailListView
+            emails={emails}
+            loading={loadingEmails}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            onRefresh={fetchDashboardData}
             onSelectEmail={setSelectedEmail}
+            activeTab={currentTab}
           />
-        )}
-
-        {activeTab === 'sent' && (
-          <EmailList
-            initialStatus="SENT"
-            title="Sent Email History"
-            description="Successfully delivered emails with SMTP message IDs and acceptance timestamps."
-            onSelectEmail={setSelectedEmail}
-          />
-        )}
-
-        {activeTab === 'drafts' && (
-          <EmailList
-            initialStatus="ALL"
-            title="All Email Records &amp; Queue Diagnostics"
-            description="Complete audit log including Drafts, Processing leases, and Quarantined failures."
-            onSelectEmail={setSelectedEmail}
-          />
-        )}
-
-        {activeTab === 'compose' && (
-          <ComposeCampaign onSuccess={() => setActiveTab('scheduled')} />
         )}
       </main>
-
-      {/* Email Detail Inspection Modal */}
-      <EmailDetailModal email={selectedEmail} onClose={() => setSelectedEmail(null)} />
-
-      {/* Footer */}
-      <Footer />
     </div>
   );
 };

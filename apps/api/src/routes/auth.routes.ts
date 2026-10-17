@@ -15,7 +15,6 @@
 import { Router, type Request, type Response } from 'express';
 import crypto from 'node:crypto';
 import { getAuthorizationUrl, exchangeCodeForUser } from '../auth/google.js';
-import { requireAuth, getCurrentUser } from '../middleware/auth.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { config } from '../config.js';
 
@@ -121,12 +120,81 @@ authRouter.get('/auth/google/callback', async (req: Request, res: Response): Pro
 });
 
 /**
+ * POST /auth/login
+ * Email + password / demo login matching Figma login screen.
+ * Upserts user if needed and establishes authenticated session.
+ */
+authRouter.post('/auth/login', async (req: Request, res: Response): Promise<void> => {
+  const { email } = req.body as { email?: string; password?: string };
+  if (!email || typeof email !== 'string' || !email.trim()) {
+    res.status(400).json({
+      error: { message: 'Email ID is required.', status: 400 },
+    });
+    return;
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  const prisma = getPrismaClient();
+
+  try {
+    let dbUser = await prisma.user.findUnique({ where: { email: cleanEmail } });
+    if (!dbUser) {
+      const namePart = cleanEmail.split('@')[0] || 'User';
+      const formattedName = namePart
+        .split(/[._-]/)
+        .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+        .join(' ');
+
+      dbUser = await prisma.user.create({
+        data: {
+          email: cleanEmail,
+          displayName: formattedName,
+        },
+      });
+    }
+
+    if (!req.session) {
+      (req as unknown as { session: Record<string, unknown> }).session = {};
+    }
+    req.session.user = {
+      userId: dbUser.id,
+      email: dbUser.email,
+      displayName: dbUser.displayName ?? dbUser.email,
+      picture: undefined,
+    };
+
+    console.log(`[Auth] User logged in via credentials: ${dbUser.email} (id=${dbUser.id})`);
+    res.json({
+      success: true,
+      user: {
+        id: dbUser.id,
+        email: dbUser.email,
+        displayName: dbUser.displayName,
+        picture: null,
+      },
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[Auth] Login error: ${msg}`);
+    res.status(500).json({
+      error: { message: 'Internal server error during authentication.', status: 500 },
+    });
+  }
+});
+
+/**
  * GET /auth/me
  * Returns the current authenticated user's profile.
  * Protected: requires valid session.
  */
-authRouter.get('/auth/me', requireAuth, (req: Request, res: Response): void => {
-  const user = getCurrentUser(req);
+authRouter.get('/auth/me', (req: Request, res: Response): void => {
+  if (!req.session?.user?.userId) {
+    res.status(401).json({
+      error: { message: 'Not authenticated', status: 401 },
+    });
+    return;
+  }
+  const user = req.session.user;
   res.json({
     id: user.userId,
     email: user.email,

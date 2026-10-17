@@ -371,3 +371,44 @@ curl -X POST http://localhost:5000/api/cancel \
 ## 14. License
 
 UNLICENSED — Built for ReachInbox Technical Assessment.
+
+## Run the complete stack with Docker Compose (Windows)
+
+Prerequisites: Docker Desktop with the **Linux** container engine running, WSL 2 enabled, and Docker Desktop WSL integration enabled for your Ubuntu distribution. Open PowerShell in the repository folder.
+
+1. Copy the example environment file and keep real secrets out of Git:
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+   The Compose development defaults provide PostgreSQL, Redis, Elasticsearch, and a development session secret. Set OAuth values only if you plan to use those integrations. Leave `SMTP_HOST`, `SMTP_USER`, and `SMTP_PASS` empty for local email tests; the worker uses Ethereal, a test mailbox that does not deliver to real recipients. Its preview links are logged without SMTP passwords. The web app is at `http://localhost:5173`, and the API is at `http://localhost:5000`.
+
+2. Validate and build/start all services:
+
+   ```powershell
+   docker compose config --quiet
+   docker compose up --build -d
+   docker compose ps
+   ```
+
+   The API applies checked-in Prisma migrations before starting. The worker waits for the API health check, and one worker container is started by default so each queue job has one intended consumer process.
+
+3. Open `http://localhost:5173`. Check API health at `http://localhost:5000/health` and API readiness at `http://localhost:5000/ready`.
+
+Useful commands:
+
+```powershell
+docker compose logs -f
+docker compose logs --tail=100 api worker
+docker compose restart
+docker compose down
+```
+
+`docker compose down` removes containers and the Compose network but preserves the named PostgreSQL, Redis, and Elasticsearch volumes. Do not use `docker compose down --volumes` unless you intend to erase that persistent data. Back up important data separately.
+
+The `.env` file is ignored by Git. Do not put production credentials in `.env.example`. The supplied Compose configuration is for local development; it uses an unauthenticated Elasticsearch instance and a development session secret. Configure production secrets, SMTP, OAuth, and secured infrastructure before any production deployment.
+
+### Docker Desktop troubleshooting
+
+If `docker compose` reports that it cannot connect to `dockerDesktopLinuxEngine`, Docker Desktop's Linux engine is unavailable to the CLI. Start Docker Desktop and wait for its engine status to become ready, then run `docker info` and `docker compose version` again. If WSL reports `E_ACCESSDENIED`, retry `wsl --status` and `wsl -l -v` from a normal Windows terminal; if access remains denied, review Docker Desktop's WSL Integration settings for the installed Ubuntu distribution. Do not reset Docker Desktop or delete volumes to resolve a named-pipe connection error.

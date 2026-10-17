@@ -105,9 +105,11 @@ export function validateSmtpConfig(config: {
     );
   }
 
-  if (config.NODE_ENV === 'production' && !hasFullSmtp) {
+  // ALLOW_ETHEREAL=true opts a production deploy into the Ethereal fake inbox
+  // (the API sets it for its embedded worker when no SMTP relay is configured).
+  if (config.NODE_ENV === 'production' && !hasFullSmtp && process.env.ALLOW_ETHEREAL !== 'true') {
     throw new Error(
-      '[Worker Config] Production environment requires real SMTP configuration (SMTP_HOST, SMTP_USER, SMTP_PASS). Ethereal fallback is disabled in production.'
+      '[Worker Config] Production environment requires real SMTP configuration (SMTP_HOST, SMTP_USER, SMTP_PASS). Ethereal fallback is disabled in production unless ALLOW_ETHEREAL=true.'
     );
   }
 

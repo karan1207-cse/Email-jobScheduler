@@ -6,6 +6,7 @@ import { closeRedisClient } from './redis/client.js';
 import { closePrismaClient } from './db/prisma.js';
 import { closeEmailQueue } from './queue/queue.js';
 import { recoverPendingOutboxEvents, reconcileScheduledEmails } from './services/scheduler.service.js';
+import { startEmbeddedWorker, stopEmbeddedWorker } from './embedded-worker.js';
 
 const app = createApp();
 
@@ -35,6 +36,9 @@ async function startServer(): Promise<void> {
       }
       process.exit(1);
     });
+
+    // On hosts without a separate worker service, run the worker alongside the API.
+    startEmbeddedWorker();
 
     // Run outbox recovery after server is up (non-blocking)
     recoverPendingOutboxEvents()
@@ -72,6 +76,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     }
 
     await Promise.all([
+      stopEmbeddedWorker(),
       closeDatabasePool(),
       closeRedisClient(),
       closePrismaClient(),

@@ -13,7 +13,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@elastic/elasticsearch": "^9.5.1",
+    "@elastic/elasticsearch": "^8.19.2",
     "@prisma/client": "^6.19.3",
     "@reachinbox/shared": "*",
     "bullmq": "^6.3.15",

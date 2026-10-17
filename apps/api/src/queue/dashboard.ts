@@ -18,23 +18,35 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 
 const EMAIL_QUEUE_NAME = process.env.EMAIL_QUEUE_NAME || 'email-jobs';
 const REDIS_URL        = process.env.REDIS_URL        || 'redis://localhost:6379';
-const NODE_ENV         = process.env.NODE_ENV         || 'development';
 export const DASHBOARD_BASE_PATH = '/admin/queues';
+
+let dashboardQueueInstance: Queue | null = null;
 
 // ---------------------------------------------------------------------------
 // Redis connection from URL
 // ---------------------------------------------------------------------------
 
-function parseRedisConnection(url: string): { host: string; port: number; password?: string } {
+function parseRedisConnection(url: string) {
   try {
     const parsed = new URL(url);
     return {
       host:     parsed.hostname || 'localhost',
       port:     parseInt(parsed.port || '6379', 10),
       password: parsed.password || undefined,
+      lazyConnect: true,
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: null,
+      retryStrategy: () => null,
     };
   } catch {
-    return { host: 'localhost', port: 6379 };
+    return {
+      host: 'localhost',
+      port: 6379,
+      lazyConnect: true,
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: null,
+      retryStrategy: () => null,
+    };
   }
 }
 
@@ -49,8 +61,9 @@ function parseRedisConnection(url: string): { host: string; port: number; passwo
  */
 export function dashboardGuard(req: Request, res: Response, next: NextFunction): void {
   const adminToken = process.env.ADMIN_TOKEN;
+  const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
 
-  if (NODE_ENV === 'production') {
+  if (isProd) {
     const provided = (req.headers['x-admin-token'] as string | undefined) ?? '';
     if (!adminToken || provided !== adminToken) {
       res.status(403).json({ error: 'Forbidden: invalid or missing admin token.' });
@@ -70,31 +83,42 @@ export function dashboardGuard(req: Request, res: Response, next: NextFunction):
 }
 
 // ---------------------------------------------------------------------------
-// Dashboard factory
+// Dashboard factory & lifecycle
 // ---------------------------------------------------------------------------
 
 /**
  * Build the Bull Board router. Returns null if the dashboard should be
  * disabled (production without ADMIN_TOKEN).
  */
-export function createQueueDashboard(): Router | null {
+export function createQueueDashboard(customQueue?: Queue): Router | null {
+  const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
   const adminToken = process.env.ADMIN_TOKEN;
 
-  if (NODE_ENV === 'production' && !adminToken) {
+  if (isProd && !adminToken) {
     console.warn(
       '[BullBoard] Dashboard disabled in production: set ADMIN_TOKEN env var to enable it.'
     );
     return null;
   }
 
-  const connection  = parseRedisConnection(REDIS_URL);
-  const emailQueue  = new Queue(EMAIL_QUEUE_NAME, { connection });
+  if (customQueue) {
+    dashboardQueueInstance = customQueue;
+  } else if (!dashboardQueueInstance) {
+    const connection = parseRedisConnection(process.env.REDIS_URL || REDIS_URL);
+    const queueName = process.env.EMAIL_QUEUE_NAME || EMAIL_QUEUE_NAME;
+    dashboardQueueInstance = new Queue(queueName, { connection });
+    dashboardQueueInstance.on('error', (err: Error) => {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn('[BullBoard] Queue Redis connection error:', err.message);
+      }
+    });
+  }
 
   const serverAdapter = new ExpressAdapter();
   serverAdapter.setBasePath(DASHBOARD_BASE_PATH);
 
   createBullBoard({
-    queues:        [new BullMQAdapter(emailQueue)],
+    queues:        [new BullMQAdapter(dashboardQueueInstance)],
     serverAdapter,
   });
 
@@ -103,4 +127,19 @@ export function createQueueDashboard(): Router | null {
   wrapper.use(dashboardGuard);
   wrapper.use(serverAdapter.getRouter());
   return wrapper;
+}
+
+/**
+ * Gracefully close the dashboard queue instance during application teardown or testing.
+ */
+export async function closeQueueDashboard(): Promise<void> {
+  if (dashboardQueueInstance) {
+    try {
+      await dashboardQueueInstance.close();
+    } catch {
+      // ignore
+    } finally {
+      dashboardQueueInstance = null;
+    }
+  }
 }

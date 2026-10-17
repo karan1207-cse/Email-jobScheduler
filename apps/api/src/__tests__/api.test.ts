@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
+
+vi.mock('../queue/dashboard.js', () => ({
+  createQueueDashboard: () => null,
+  closeQueueDashboard: vi.fn().mockResolvedValue(undefined),
+  DASHBOARD_BASE_PATH: '/admin/queues',
+  dashboardGuard: vi.fn(),
+}));
+
 import { createApp } from '../app.js';
 import * as dbModule from '../db/client.js';
 import * as redisModule from '../redis/client.js';

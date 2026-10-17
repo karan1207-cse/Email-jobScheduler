@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import crypto from 'node:crypto';
 import type { Email, OutboxEvent } from '@prisma/client';
+
+vi.mock('../queue/dashboard.js', () => ({
+  createQueueDashboard: () => null,
+  closeQueueDashboard: vi.fn().mockResolvedValue(undefined),
+  DASHBOARD_BASE_PATH: '/admin/queues',
+  dashboardGuard: vi.fn(),
+}));
+
 import { createApp } from '../app.js';
 import * as prismaModule from '../db/prisma.js';
 import { createScheduledEmailWithOutbox } from '../services/outbox.service.js';

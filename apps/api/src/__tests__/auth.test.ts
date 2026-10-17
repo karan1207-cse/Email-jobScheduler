@@ -22,6 +22,13 @@ vi.mock('../queue/queue.js', () => ({
   closeEmailQueue: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../queue/dashboard.js', () => ({
+  createQueueDashboard: () => null,
+  closeQueueDashboard: vi.fn().mockResolvedValue(undefined),
+  DASHBOARD_BASE_PATH: '/admin/queues',
+  dashboardGuard: vi.fn(),
+}));
+
 import { createApp } from '../app.js';
 import * as prismaModule from '../db/prisma.js';
 import * as googleAuthModule from '../auth/google.js';

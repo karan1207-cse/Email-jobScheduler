@@ -23,6 +23,12 @@ export interface AppConfig {
   FRONTEND_URL: string;
   DATABASE_URL: string;
   REDIS_URL: string;
+  // Google OAuth (Milestone 6) — optional in development
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET: string;
+  GOOGLE_REDIRECT_URI: string;
+  // Session (Milestone 6)
+  SESSION_SECRET: string;
 }
 
 export function loadConfig(): AppConfig {
@@ -46,12 +52,34 @@ export function loadConfig(): AppConfig {
     throw new Error('REDIS_URL environment variable is required.');
   }
 
+  // Google OAuth — warn in development, not fatal (routes return 503 without credentials)
+  const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+  const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+  const GOOGLE_REDIRECT_URI =
+    process.env.GOOGLE_REDIRECT_URI ||
+    `http://localhost:${parseInt(process.env.PORT || '5000', 10)}/auth/google/callback`;
+
+  if (NODE_ENV === 'production' && (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET)) {
+    throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required in production.');
+  }
+
+  // Session secret — must be set in production; defaults to random in development
+  const SESSION_SECRET =
+    process.env.SESSION_SECRET ||
+    (NODE_ENV === 'production'
+      ? (() => { throw new Error('SESSION_SECRET is required in production.'); })()
+      : 'dev-session-secret-NOT-FOR-PRODUCTION');
+
   return {
     NODE_ENV,
     PORT,
     FRONTEND_URL,
     DATABASE_URL,
     REDIS_URL,
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    GOOGLE_REDIRECT_URI,
+    SESSION_SECRET,
   };
 }
 

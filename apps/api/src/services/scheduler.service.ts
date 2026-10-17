@@ -38,10 +38,13 @@ export interface ScheduleEmailInput {
  */
 export async function scheduleEmail(
   emailId: string,
-  input: ScheduleEmailInput
+  input: ScheduleEmailInput,
+  userId: string = DEV_DEFAULT_USER.id
 ): Promise<EmailDto> {
   const prisma = getPrismaClient();
-  await ensureDevUser();
+  if (userId === DEV_DEFAULT_USER.id) {
+    await ensureDevUser();
+  }
 
   const scheduledAt = new Date(input.scheduledTime);
   const now = new Date();
@@ -55,7 +58,7 @@ export async function scheduleEmail(
   // 1. Transactional DB update: Email → SCHEDULED + OutboxEvent → PENDING
   const { email, outboxEventId } = await prisma.$transaction(async (tx) => {
     const existing = await tx.email.findFirst({
-      where: { id: emailId, userId: DEV_DEFAULT_USER.id },
+      where: { id: emailId, userId },
     });
 
     if (!existing) {
@@ -128,12 +131,17 @@ export async function scheduleEmail(
 /**
  * Cancel a SCHEDULED email. Removes the BullMQ job and marks the email CANCELLED.
  */
-export async function cancelScheduledEmail(emailId: string): Promise<EmailDto> {
+export async function cancelScheduledEmail(
+  emailId: string,
+  userId: string = DEV_DEFAULT_USER.id
+): Promise<EmailDto> {
   const prisma = getPrismaClient();
-  await ensureDevUser();
+  if (userId === DEV_DEFAULT_USER.id) {
+    await ensureDevUser();
+  }
 
   const existing = await prisma.email.findFirst({
-    where: { id: emailId, userId: DEV_DEFAULT_USER.id },
+    where: { id: emailId, userId },
   });
 
   if (!existing) {

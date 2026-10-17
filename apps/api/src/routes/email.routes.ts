@@ -17,8 +17,12 @@ import {
   listEmailsQuerySchema,
   idParamSchema,
 } from '../validations/email.schema.js';
+import { requireAuth } from '../middleware/auth.js';
 
 export const emailRouter = Router();
+
+// Protect all email endpoints with authentication
+emailRouter.use('/api/emails', requireAuth);
 
 // POST /api/emails - Create draft email
 emailRouter.post(

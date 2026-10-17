@@ -6,11 +6,11 @@ import { ConflictError, NotFoundError } from '../middleware/errorHandler.js';
 import type { CreateEmailDto, UpdateEmailDto, ListEmailsQuery } from '../validations/email.schema.js';
 
 // ==============================================================================
-// Development User Scoping (Milestone 2 Limitation)
+// Development User Scoping (Milestone 2 → Milestone 6)
 // ==============================================================================
-// Full Google OAuth authentication is deferred to Milestone 4.
-// For Milestone 2 local development, a deterministic seeded development user
-// enforces proper ownership relationships without insecure client-supplied IDs.
+// In production, userId comes from the Google OAuth session.
+// In development (no GOOGLE_CLIENT_ID set), a deterministic dev user is used.
+// This constant is preserved for backward compatibility with existing tests.
 export const DEV_DEFAULT_USER = {
   id: '00000000-0000-0000-0000-000000000001',
   email: 'dev@reachinbox.local',
@@ -66,10 +66,16 @@ export interface CreateEmailResult {
 
 export async function createDraftEmail(
   input: CreateEmailDto,
-  idempotencyKey?: string
+  idempotencyKey?: string,
+  userId: string = DEV_DEFAULT_USER.id
 ): Promise<CreateEmailResult> {
   const prisma = getPrismaClient();
-  await ensureDevUser();
+
+  // Ensure the user record exists (dev user upsert; for OAuth users, the
+  // callback already upserts via auth.routes.ts)
+  if (userId === DEV_DEFAULT_USER.id) {
+    await ensureDevUser();
+  }
 
   const trimmedKey = idempotencyKey?.trim() || null;
   const fingerprint = computeFingerprint(input);
@@ -79,7 +85,7 @@ export async function createDraftEmail(
     const existing = await prisma.email.findUnique({
       where: {
         userId_idempotencyKey: {
-          userId: DEV_DEFAULT_USER.id,
+          userId,
           idempotencyKey: trimmedKey,
         },
       },
@@ -105,7 +111,7 @@ export async function createDraftEmail(
   try {
     const created = await prisma.email.create({
       data: {
-        userId: DEV_DEFAULT_USER.id,
+        userId,
         recipient: input.recipient.trim(),
         subject: input.subject.trim(),
         body: input.body,
@@ -125,7 +131,7 @@ export async function createDraftEmail(
       const concurrentExisting = await prisma.email.findUnique({
         where: {
           userId_idempotencyKey: {
-            userId: DEV_DEFAULT_USER.id,
+            userId,
             idempotencyKey: trimmedKey!,
           },
         },
@@ -148,16 +154,20 @@ export async function createDraftEmail(
 }
 
 export async function listEmails(
-  query: ListEmailsQuery
+  query: ListEmailsQuery,
+  userId: string = DEV_DEFAULT_USER.id
 ): Promise<PaginatedResponse<EmailDto>> {
   const prisma = getPrismaClient();
-  await ensureDevUser();
+
+  if (userId === DEV_DEFAULT_USER.id) {
+    await ensureDevUser();
+  }
 
   const { page, limit, status } = query;
   const skip = (page - 1) * limit;
 
   const where = {
-    userId: DEV_DEFAULT_USER.id,
+    userId,
     ...(status ? { status: status as EmailStatus } : {}),
   };
 
@@ -182,14 +192,17 @@ export async function listEmails(
   };
 }
 
-export async function getEmailById(id: string): Promise<EmailDto> {
+export async function getEmailById(id: string, userId: string = DEV_DEFAULT_USER.id): Promise<EmailDto> {
   const prisma = getPrismaClient();
-  await ensureDevUser();
+
+  if (userId === DEV_DEFAULT_USER.id) {
+    await ensureDevUser();
+  }
 
   const record = await prisma.email.findFirst({
     where: {
       id,
-      userId: DEV_DEFAULT_USER.id,
+      userId,
     },
   });
 
@@ -202,15 +215,19 @@ export async function getEmailById(id: string): Promise<EmailDto> {
 
 export async function updateDraftEmail(
   id: string,
-  updates: UpdateEmailDto
+  updates: UpdateEmailDto,
+  userId: string = DEV_DEFAULT_USER.id
 ): Promise<EmailDto> {
   const prisma = getPrismaClient();
-  await ensureDevUser();
+
+  if (userId === DEV_DEFAULT_USER.id) {
+    await ensureDevUser();
+  }
 
   const existing = await prisma.email.findFirst({
     where: {
       id,
-      userId: DEV_DEFAULT_USER.id,
+      userId,
     },
   });
 
@@ -236,14 +253,17 @@ export async function updateDraftEmail(
   return mapToDto(updated);
 }
 
-export async function deleteDraftEmail(id: string): Promise<void> {
+export async function deleteDraftEmail(id: string, userId: string = DEV_DEFAULT_USER.id): Promise<void> {
   const prisma = getPrismaClient();
-  await ensureDevUser();
+
+  if (userId === DEV_DEFAULT_USER.id) {
+    await ensureDevUser();
+  }
 
   const existing = await prisma.email.findFirst({
     where: {
       id,
-      userId: DEV_DEFAULT_USER.id,
+      userId,
     },
   });
 

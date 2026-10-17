@@ -20,12 +20,20 @@ const EMAIL_JOB_NAME = 'send-email';
 
 let worker: Worker<EmailJobData> | null = null;
 let redisConnection: Redis | null = null;
+let rateLimitRedisConnection: Redis | null = null;
 
 function createRedisConnection(): Redis {
-  return new Redis(workerConfig.REDIS_URL, {
+  const client = new Redis(workerConfig.REDIS_URL, {
     maxRetriesPerRequest: null, // Required by BullMQ
     enableReadyCheck: false,
+    retryStrategy: (times) => Math.min(times * 1000, 5000),
   });
+
+  client.on('error', (err: Error) => {
+    console.error('[Worker Redis]', err.message);
+  });
+
+  return client;
 }
 
 async function startWorker(): Promise<void> {
@@ -42,8 +50,8 @@ async function startWorker(): Promise<void> {
   redisConnection = createRedisConnection();
 
   // Initialise the distributed rate limiter with a dedicated connection
-  const rateLimitRedis = createRedisConnection();
-  initRateLimiter(rateLimitRedis);
+  rateLimitRedisConnection = createRedisConnection();
+  initRateLimiter(rateLimitRedisConnection);
   console.log('[Worker] ✅ Distributed rate limiter initialised.');
 
   worker = new Worker<EmailJobData>(
@@ -104,8 +112,12 @@ async function gracefulShutdown(signal: string): Promise<void> {
     }
     await closePrisma();
     if (redisConnection) {
-      await redisConnection.quit();
+      await redisConnection.quit().catch(() => {});
       console.log('[Worker] Redis connection closed.');
+    }
+    if (rateLimitRedisConnection) {
+      await rateLimitRedisConnection.quit().catch(() => {});
+      console.log('[Worker] Rate limiter Redis connection closed.');
     }
     clearTimeout(timeout);
     console.log('[Worker] Shutdown complete.');

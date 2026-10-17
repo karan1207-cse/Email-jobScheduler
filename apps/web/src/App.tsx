@@ -13,6 +13,7 @@ import { ComposeCampaign } from './components/ComposeCampaign.js';
 import { EmailList } from './components/EmailList.js';
 import { EmailDetailModal } from './components/EmailDetailModal.js';
 import { HealthTelemetry } from './components/HealthTelemetry.js';
+import { SlackSettings } from './components/SlackSettings.js';
 import { Footer } from './components/Footer.js';
 
 export const App: React.FC = () => {
@@ -136,6 +137,11 @@ export const App: React.FC = () => {
               lastChecked={lastChecked}
               apiBaseUrl={API_BASE_URL}
             />
+
+            {/* Slack Alerting Settings */}
+            <div style={{ marginTop: '2rem' }}>
+              <SlackSettings />
+            </div>
 
             {/* Recent Scheduled Emails Quick Table */}
             <div style={{ marginTop: '2.5rem' }}>

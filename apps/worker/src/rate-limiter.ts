@@ -82,9 +82,9 @@ export interface RateLimiterOptions {
 // ── Rate Limiter Class ───────────────────────────────────────────────────────
 
 export class DistributedRateLimiter {
-  private readonly redis: Redis;
+  public readonly redis: Redis;
   private readonly prefix: string;
-  private readonly maxPerHour: number;
+  public readonly maxPerHour: number;
   private readonly intervalMs: number;
   private readonly scope: 'global' | 'per-sender';
 

@@ -1160,3 +1160,48 @@ body {
 .text-dim { color: var(--text-dim); }
 .text-xs { font-size: 0.75rem; }
 .font-semibold { font-weight: 600; }
+
+/* Slack Settings */
+.slack-settings-card {
+  border-left: 4px solid #36c5f0;
+}
+
+.slack-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.slack-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.slack-meta-box {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 0.85rem 1.15rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  margin-bottom: 1.25rem;
+}
+
+.slack-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.webhook-form {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 1.25rem;
+}
+

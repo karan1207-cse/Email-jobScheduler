@@ -7,6 +7,9 @@ import { healthRouter } from './routes/health.js';
 import { emailRouter } from './routes/email.routes.js';
 import { schedulerRouter } from './routes/scheduler.routes.js';
 import { authRouter } from './routes/auth.routes.js';
+import { slackRouter } from './routes/slack.routes.js';
+import { searchRouter } from './routes/search.routes.js';
+import { createQueueDashboard, DASHBOARD_BASE_PATH } from './queue/dashboard.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 export function createApp(): Application {
@@ -47,8 +50,17 @@ export function createApp(): Application {
   app.use(rootRouter);
   app.use(healthRouter);
   app.use(authRouter);   // Auth routes: /auth/google, /auth/me, /auth/logout
+  app.use(slackRouter);  // Slack routes: /auth/slack, /api/slack/*
   app.use(emailRouter);
   app.use(schedulerRouter);
+  app.use(searchRouter);  // Search routes: /api/search/emails, /api/search/rebuild
+
+  // BullMQ queue dashboard — /admin/queues (localhost-only in dev, token-protected in prod)
+  const dashboardRouter = createQueueDashboard();
+  if (dashboardRouter) {
+    app.use(DASHBOARD_BASE_PATH, dashboardRouter);
+    console.log(`[BullBoard] Queue dashboard available at ${DASHBOARD_BASE_PATH}`);
+  }
 
   // Error handling
   app.use(notFoundHandler);

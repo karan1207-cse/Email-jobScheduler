@@ -36,8 +36,32 @@ services:
       retries: 5
       start_period: 5s
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    container_name: reachinbox-elasticsearch
+    restart: unless-stopped
+    environment:
+      # Single-node development cluster — no TLS, no authentication
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-}
+    ports:
+      - "${ELASTICSEARCH_PORT:-9200}:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
 volumes:
   postgres_data:
     name: reachinbox_postgres_data
   redis_data:
     name: reachinbox_redis_data
+  elasticsearch_data:
+    name: reachinbox_elasticsearch_data

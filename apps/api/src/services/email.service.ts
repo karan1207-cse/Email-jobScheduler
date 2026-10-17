@@ -4,6 +4,7 @@ import type { EmailDto, PaginatedResponse } from '@reachinbox/shared';
 import { getPrismaClient } from '../db/prisma.js';
 import { ConflictError, NotFoundError } from '../middleware/errorHandler.js';
 import type { CreateEmailDto, UpdateEmailDto, ListEmailsQuery } from '../validations/email.schema.js';
+import { indexEmail, deleteEmailFromIndex } from './elasticsearch.service.js';
 
 // ==============================================================================
 // Development User Scoping (Milestone 2 → Milestone 6)
@@ -120,6 +121,9 @@ export async function createDraftEmail(
         requestFingerprint: trimmedKey ? fingerprint : null,
       },
     });
+
+    // Best-effort ES indexing — never blocks or throws
+    indexEmail(created).catch(() => {});
 
     return {
       email: mapToDto(created),
@@ -250,6 +254,9 @@ export async function updateDraftEmail(
     },
   });
 
+  // Best-effort ES indexing
+  indexEmail(updated).catch(() => {});
+
   return mapToDto(updated);
 }
 
@@ -280,4 +287,7 @@ export async function deleteDraftEmail(id: string, userId: string = DEV_DEFAULT_
   await prisma.email.delete({
     where: { id },
   });
+
+  // Best-effort ES index cleanup
+  deleteEmailFromIndex(id).catch(() => {});
 }

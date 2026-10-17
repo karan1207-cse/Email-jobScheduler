@@ -27,6 +27,10 @@ export interface AppConfig {
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   GOOGLE_REDIRECT_URI: string;
+  // Slack OAuth (Milestone 8)
+  SLACK_CLIENT_ID: string;
+  SLACK_CLIENT_SECRET: string;
+  SLACK_REDIRECT_URI: string;
   // Session (Milestone 6)
   SESSION_SECRET: string;
 }
@@ -63,6 +67,13 @@ export function loadConfig(): AppConfig {
     throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required in production.');
   }
 
+  // Slack OAuth (Milestone 8) — optional in development
+  const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID || '';
+  const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET || '';
+  const SLACK_REDIRECT_URI =
+    process.env.SLACK_REDIRECT_URI ||
+    `http://localhost:${PORT}/auth/slack/callback`;
+
   // Session secret — must be set in production; defaults to random in development
   const SESSION_SECRET =
     process.env.SESSION_SECRET ||
@@ -79,6 +90,9 @@ export function loadConfig(): AppConfig {
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
     GOOGLE_REDIRECT_URI,
+    SLACK_CLIENT_ID,
+    SLACK_CLIENT_SECRET,
+    SLACK_REDIRECT_URI,
     SESSION_SECRET,
   };
 }

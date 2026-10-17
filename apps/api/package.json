@@ -15,6 +15,9 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "@bull-board/api": "^9.10.4",
+    "@bull-board/express": "^9.10.4",
+    "@elastic/elasticsearch": "^9.5.1",
     "@prisma/client": "^6.19.3",
     "@reachinbox/shared": "*",
     "@types/nodemailer": "^8.0.2",

@@ -18,6 +18,8 @@ import { type Job, DelayedError } from 'bullmq';
 import { getPrisma } from './prisma.js';
 import { sendEmail, type SendResult } from './mailer.js';
 import { DistributedRateLimiter } from './rate-limiter.js';
+import { dispatchRateLimitAlert } from './slack-alert.js';
+import { indexEmailDoc } from './es-indexer.js';
 import type { Redis } from 'ioredis';
 
 export interface EmailJobData {
@@ -177,6 +179,25 @@ export async function persistSentStateWithRetry(
           processedAt: new Date(),
         },
       });
+
+      // Best-effort ES re-index to reflect SENT status
+      const sentEmail = await prisma.email.findUnique({ where: { id: emailId } });
+      if (sentEmail) {
+        indexEmailDoc({
+          id:            sentEmail.id,
+          userId:        sentEmail.userId,
+          recipient:     sentEmail.recipient,
+          subject:       sentEmail.subject,
+          body:          sentEmail.body,
+          status:        sentEmail.status,
+          scheduledTime: sentEmail.scheduledTime?.toISOString() ?? null,
+          sentAt:        sentEmail.sentAt?.toISOString() ?? null,
+          createdAt:     sentEmail.createdAt.toISOString(),
+          updatedAt:     sentEmail.updatedAt.toISOString(),
+          attemptCount:  sentEmail.attemptCount,
+          lastError:     sentEmail.lastError ?? null,
+        }).catch(() => {});
+      }
 
       return; // Successfully persisted
     } catch (err: unknown) {
@@ -401,6 +422,18 @@ export async function processEmailJob(job: Job<EmailJobData>, token?: string): P
 
         // Move job to delayed state — does NOT consume a BullMQ retry attempt
         await job.moveToDelayed(Date.now() + result.retryAfterMs, lockToken);
+
+        // Dispatch Slack alert asynchronously with Redis deduplication
+        if (limiter.redis) {
+          dispatchRateLimitAlert(limiter.redis, {
+            scope: email.userId || 'global',
+            hourlyLimit: limiter.maxPerHour,
+            retryAfterMs: result.retryAfterMs,
+            reason: result.reason,
+          }).catch((err) => {
+            console.warn('[Worker] Slack rate-limit alert dispatch failed:', err);
+          });
+        }
 
         // Throw DelayedError so BullMQ recognizes this job as delayed, skips moveToFailed
         throw new RateLimitDeferralError(result.retryAfterMs, result.reason ?? 'Rate limited');

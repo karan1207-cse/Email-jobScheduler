@@ -12,6 +12,7 @@ import { searchRouter } from './routes/search.routes.js';
 import { createQueueDashboard, DASHBOARD_BASE_PATH } from './queue/dashboard.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { createRedisSessionStore } from './auth/redis-session-store.js';
+import { mountWeb } from './web.js';
 
 export function createApp(): Application {
   const app = express();
@@ -49,6 +50,9 @@ export function createApp(): Application {
     }
     next();
   });
+
+  // The dashboard itself, when the API serves it (see web.ts).
+  mountWeb(app);
 
   // CORS configuration — must come before session so the preflight OPTIONS
   // is handled before any cookie processing

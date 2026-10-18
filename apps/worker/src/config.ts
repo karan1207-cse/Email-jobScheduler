@@ -73,6 +73,12 @@ export const workerConfig = {
   SMTP_PASS: optional('SMTP_PASS', ''),
   SMTP_FROM: optional('SMTP_FROM', 'ReachInbox <noreply@reachinbox.local>'),
 
+  // Brevo HTTPS email API — used instead of SMTP when BREVO_API_KEY is set.
+  // Works on hosts that block outbound SMTP (e.g. Render's free plan).
+  BREVO_API_KEY: optional('BREVO_API_KEY', ''),
+  /** Verified Brevo sender address; defaults to the Brevo account's email. */
+  BREVO_SENDER_EMAIL: optional('BREVO_SENDER_EMAIL', ''),
+
   // ── Rate Limiting (Milestone 4) ──────────────────────────────────────────
   /** Maximum emails allowed per hourly window. 0 = unlimited. */
   RATE_LIMIT_MAX_PER_HOUR: positiveInt('RATE_LIMIT_MAX_PER_HOUR', 100),
@@ -107,9 +113,10 @@ export function validateSmtpConfig(config: {
 
   // ALLOW_ETHEREAL=true opts a production deploy into the Ethereal fake inbox
   // (the API sets it for its embedded worker when no SMTP relay is configured).
-  if (config.NODE_ENV === 'production' && !hasFullSmtp && process.env.ALLOW_ETHEREAL !== 'true') {
+  const hasBrevo = Boolean(process.env.BREVO_API_KEY);
+  if (config.NODE_ENV === 'production' && !hasFullSmtp && !hasBrevo && process.env.ALLOW_ETHEREAL !== 'true') {
     throw new Error(
-      '[Worker Config] Production environment requires real SMTP configuration (SMTP_HOST, SMTP_USER, SMTP_PASS). Ethereal fallback is disabled in production unless ALLOW_ETHEREAL=true.'
+      '[Worker Config] Production environment requires real SMTP configuration (SMTP_HOST, SMTP_USER, SMTP_PASS) or BREVO_API_KEY. Ethereal fallback is disabled in production unless ALLOW_ETHEREAL=true.'
     );
   }
 

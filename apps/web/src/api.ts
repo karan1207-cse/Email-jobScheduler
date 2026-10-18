@@ -1,8 +1,11 @@
 import type { HealthCheckResponse, ApiRootResponse, EmailDto, PaginatedResponse } from '@reachinbox/shared';
 
-// API base URL configured via Vite environment variables
-export const API_BASE_URL: string =
-  (import.meta.env.VITE_API_URL as string | undefined) || 'http://localhost:5000';
+// The "embedded" build is served by the API itself, so it talks to its own
+// origin. Other builds use VITE_API_URL.
+export const IS_EMBEDDED_BUILD = import.meta.env.MODE === 'embedded';
+export const API_BASE_URL: string = IS_EMBEDDED_BUILD
+  ? window.location.origin
+  : (import.meta.env.VITE_API_URL as string | undefined) || 'http://localhost:5000';
 
 export interface AuthUser {
   id: string;
@@ -43,18 +46,18 @@ export async function fetchApiHealth(): Promise<HealthCheckResponse> {
  */
 export async function fetchCurrentUser(): Promise<AuthUser | null> {
   try {
-    const response = await fetch(`${API_BASE_URL}/auth/me`, {
+    // /auth/session answers 200 with { user: null } when signed out, so the
+    // check doesn't show up as a failed request in the browser console.
+    const response = await fetch(`${API_BASE_URL}/auth/session`, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       credentials: 'include',
     });
-    if (response.status === 401) {
-      return null;
-    }
     if (!response.ok) {
       throw new Error(`Failed to fetch current user (HTTP ${response.status})`);
     }
-    return (await response.json()) as AuthUser;
+    const body = (await response.json()) as { user: AuthUser | null };
+    return body.user;
   } catch (err) {
     console.warn('[API] Could not fetch current user:', err);
     return null;

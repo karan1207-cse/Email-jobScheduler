@@ -231,6 +231,25 @@ describe('Milestone 6: Google OAuth & Multi-User Isolation', () => {
     });
   });
 
+  describe('GET /auth/session', () => {
+    afterEach(() => { delete process.env.ALLOW_DEV_LOGIN; });
+
+    it('answers 200 with user null when signed out', async () => {
+      const res = await request(app).get('/auth/session');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ user: null });
+    });
+
+    it('returns the signed-in user', async () => {
+      process.env.ALLOW_DEV_LOGIN = 'true';
+      const agent = request.agent(app);
+      await agent.get('/auth/dev-login');
+      const res = await agent.get('/auth/session');
+      expect(res.status).toBe(200);
+      expect(res.body.user.email).toBe('dev@reachinbox.local');
+    });
+  });
+
   describe('Local dev sign-in (no Google keys)', () => {
     afterEach(() => { delete process.env.ALLOW_DEV_LOGIN; });
 

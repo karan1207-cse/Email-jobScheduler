@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 import { getAuthorizationUrl, exchangeCodeForUser } from '../auth/google.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { config } from '../config.js';
+import { frontendUrl } from '../web.js';
 import { DEV_DEFAULT_USER, ensureDevUser } from '../services/email.service.js';
 
 export const authRouter = Router();
@@ -64,7 +65,7 @@ authRouter.get('/auth/google/callback', async (req: Request, res: Response): Pro
   // Handle user denial or OAuth error
   if (error) {
     console.warn(`[Auth] Google OAuth error: ${error}`);
-    res.redirect(`${config.FRONTEND_URL}?auth_error=${encodeURIComponent(error)}`);
+    res.redirect(frontendUrl(`?auth_error=${encodeURIComponent(error)}`));
     return;
   }
 
@@ -72,7 +73,7 @@ authRouter.get('/auth/google/callback', async (req: Request, res: Response): Pro
   const expectedState = req.session?.oauthState;
   if (!state || state !== expectedState) {
     console.warn('[Auth] OAuth state mismatch — possible CSRF attempt.');
-    res.redirect(`${config.FRONTEND_URL}?auth_error=state_mismatch`);
+    res.redirect(frontendUrl(`?auth_error=state_mismatch`));
     return;
   }
 
@@ -82,7 +83,7 @@ authRouter.get('/auth/google/callback', async (req: Request, res: Response): Pro
   }
 
   if (!code) {
-    res.redirect(`${config.FRONTEND_URL}?auth_error=missing_code`);
+    res.redirect(frontendUrl(`?auth_error=missing_code`));
     return;
   }
 
@@ -116,12 +117,12 @@ authRouter.get('/auth/google/callback', async (req: Request, res: Response): Pro
     };
 
     console.log(`[Auth] User signed in: ${dbUser.email} (id=${dbUser.id})`);
-    res.redirect(`${config.FRONTEND_URL}?auth_success=1`);
+    res.redirect(frontendUrl(`?auth_success=1`));
     return;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[Auth] OAuth callback error: ${msg}`);
-    res.redirect(`${config.FRONTEND_URL}?auth_error=server_error`);
+    res.redirect(frontendUrl(`?auth_error=server_error`));
     return;
   }
 });
@@ -156,7 +157,21 @@ authRouter.get('/auth/dev-login', async (req: Request, res: Response): Promise<v
     email: DEV_DEFAULT_USER.email,
     displayName: DEV_DEFAULT_USER.displayName,
   };
-  req.session.save(() => res.redirect(config.FRONTEND_URL));
+  req.session.save(() => res.redirect(frontendUrl()));
+});
+
+/**
+ * GET /auth/session
+ * Same profile as /auth/me, but answers 200 with { user: null } when signed
+ * out, so the dashboard's start-up check doesn't log a 401 in the console.
+ */
+authRouter.get('/auth/session', (req: Request, res: Response): void => {
+  const user = req.session?.user;
+  res.json({
+    user: user?.userId
+      ? { id: user.userId, email: user.email, displayName: user.displayName, picture: user.picture ?? null }
+      : null,
+  });
 });
 
 /**

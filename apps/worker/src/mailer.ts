@@ -156,7 +156,78 @@ export interface SendResult {
   previewUrl: string | null;
 }
 
+const BREVO_API_URL = 'https://api.brevo.com/v3';
+const BREVO_TIMEOUT_MS = 20_000;
+let brevoAccountEmail: string | null = null;
+
+async function brevoRequest(pathname: string, init: RequestInit = {}): Promise<unknown> {
+  const response = await fetch(`${BREVO_API_URL}${pathname}`, {
+    ...init,
+    headers: {
+      'api-key': workerConfig.BREVO_API_KEY,
+      accept: 'application/json',
+      'content-type': 'application/json',
+    },
+    signal: AbortSignal.timeout(BREVO_TIMEOUT_MS),
+  });
+  const body = (await response.json().catch(() => ({}))) as { message?: string; code?: string };
+  if (!response.ok) {
+    throw new Error(`Brevo API ${response.status}: ${body.message ?? body.code ?? response.statusText}`);
+  }
+  return body;
+}
+
+/** The sender must be verified in Brevo; the account's own email is by default. */
+async function brevoSenderEmail(): Promise<string> {
+  if (workerConfig.BREVO_SENDER_EMAIL) return workerConfig.BREVO_SENDER_EMAIL;
+  if (!brevoAccountEmail) {
+    const account = (await brevoRequest('/account')) as { email?: string };
+    if (!account.email) throw new Error('Brevo API: account has no email; set BREVO_SENDER_EMAIL.');
+    brevoAccountEmail = account.email;
+  }
+  return brevoAccountEmail;
+}
+
+/**
+ * Sends through Brevo's HTTPS API (port 443), for hosts that block outbound
+ * SMTP. From is the verified Brevo sender with the user's name; replies go to
+ * the user's own address.
+ */
+async function sendViaBrevo(options: SendEmailOptions, textContent: string): Promise<SendResult> {
+  const senderEmail = await brevoSenderEmail();
+  const result = (await brevoRequest('/smtp/email', {
+    method: 'POST',
+    body: JSON.stringify({
+      sender: { email: senderEmail, name: options.sender?.name || options.sender?.email || 'ReachInbox' },
+      replyTo: options.sender ? { email: options.sender.email, name: options.sender.name || undefined } : undefined,
+      to: [{ email: options.to }],
+      subject: options.subject,
+      htmlContent: options.html,
+      textContent,
+      attachment: options.attachments?.length
+        ? options.attachments.map((a) => ({ name: a.filename, content: a.contentBase64 }))
+        : undefined,
+    }),
+  })) as { messageId?: string };
+
+  return { messageId: result.messageId ?? `brevo-${Date.now()}`, previewUrl: null };
+}
+
 export async function sendEmail(options: SendEmailOptions): Promise<SendResult> {
+  if (workerConfig.BREVO_API_KEY) {
+    const text = options.text ?? options.html.replace(/<[^>]*>/g, '').trim();
+    return sendViaBrevo(options, text);
+  }
+
+  // Render's free plan blocks outbound SMTP, so without an HTTPS provider every
+  // send would hang until it times out. Fail at once with the fix instead.
+  const hasSmtp = Boolean(workerConfig.SMTP_HOST && workerConfig.SMTP_USER && workerConfig.SMTP_PASS);
+  if (process.env.RENDER === 'true' && !hasSmtp && !transporter) {
+    throw new Error(
+      'No email provider configured: Render blocks SMTP on the free plan. Set BREVO_API_KEY on the API service.'
+    );
+  }
+
   const mailer = await getMailTransporter();
 
   // Strip basic HTML tags for plain text fallback if text not provided

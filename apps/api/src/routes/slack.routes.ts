@@ -21,6 +21,7 @@ import {
 } from '../services/slack.service.js';
 import { requireAuth, getCurrentUser } from '../middleware/auth.js';
 import { config } from '../config.js';
+import { frontendUrl } from '../web.js';
 
 export const slackRouter = Router();
 
@@ -58,14 +59,14 @@ slackRouter.get('/auth/slack/callback', async (req: Request, res: Response): Pro
 
   if (error) {
     console.warn(`[Slack] OAuth error: ${error}`);
-    res.redirect(`${config.FRONTEND_URL}?slack_error=${encodeURIComponent(error)}`);
+    res.redirect(frontendUrl(`?slack_error=${encodeURIComponent(error)}`));
     return;
   }
 
   const expectedState = req.session?.oauthState;
   if (!state || state !== expectedState) {
     console.warn('[Slack] OAuth state mismatch — possible CSRF.');
-    res.redirect(`${config.FRONTEND_URL}?slack_error=state_mismatch`);
+    res.redirect(frontendUrl(`?slack_error=state_mismatch`));
     return;
   }
 
@@ -74,7 +75,7 @@ slackRouter.get('/auth/slack/callback', async (req: Request, res: Response): Pro
   }
 
   if (!code) {
-    res.redirect(`${config.FRONTEND_URL}?slack_error=missing_code`);
+    res.redirect(frontendUrl(`?slack_error=missing_code`));
     return;
   }
 
@@ -90,12 +91,12 @@ slackRouter.get('/auth/slack/callback', async (req: Request, res: Response): Pro
       `🎉 *ReachInbox Connected!*\nSlack notifications for rate-limiting and job monitoring are now active.`
     );
 
-    res.redirect(`${config.FRONTEND_URL}?slack_connected=1`);
+    res.redirect(frontendUrl(`?slack_connected=1`));
     return;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[Slack] OAuth callback failed: ${msg}`);
-    res.redirect(`${config.FRONTEND_URL}?slack_error=${encodeURIComponent(msg)}`);
+    res.redirect(frontendUrl(`?slack_error=${encodeURIComponent(msg)}`));
     return;
   }
 });

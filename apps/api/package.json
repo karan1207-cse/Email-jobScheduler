@@ -8,7 +8,7 @@
     "prisma:generate": "prisma generate --schema=prisma/schema.prisma",
     "prisma:migrate": "prisma migrate deploy --schema=prisma/schema.prisma",
     "dev": "tsx watch src/index.ts",
-    "build": "npm run prisma:generate && tsc && npm --prefix ../worker run build",
+    "build": "npm run prisma:generate && tsc && npm --prefix ../worker run build && npm --prefix ../web run build:embedded",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",

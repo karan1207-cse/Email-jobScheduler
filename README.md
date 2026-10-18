@@ -1,4 +1,5 @@
 # ReachInbox Email Job Scheduler
+Live Demo: https://email-jobscheduler-5qj0.onrender.com/
 
 A production-style email scheduler and dashboard. The API accepts email send requests, stores them in PostgreSQL and schedules them as **BullMQ delayed jobs in Redis** (no cron of any kind). A separate worker sends them through **Ethereal Email** (fake SMTP), with per-sender hourly limits, a minimum delay between sends, configurable concurrency, Slack alerts when a limit is hit, Elasticsearch search and a live BullMQ dashboard. Scheduled emails survive restarts and are never sent twice.
 

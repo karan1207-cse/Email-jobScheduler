@@ -9,8 +9,8 @@ import './index.css';
 // lets the sign-in cookie work in every browser, including Safari and iOS.
 const apiOrigin = new URL(API_BASE_URL, window.location.href).origin;
 const isLocalHost = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
-const forwardToApi =
-  import.meta.env.PROD && !IS_EMBEDDED_BUILD && !isLocalHost && apiOrigin !== window.location.origin;
+// Not keyed on import.meta.env.PROD: hosts may build with NODE_ENV=development.
+const forwardToApi = !IS_EMBEDDED_BUILD && !isLocalHost && apiOrigin !== window.location.origin;
 
 if (forwardToApi) {
   const { pathname, search, hash } = window.location;

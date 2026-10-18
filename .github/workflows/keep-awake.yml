@@ -1,0 +1,18 @@
+# Render's free plan puts a web service to sleep after 15 minutes without
+# traffic; while asleep, scheduled emails can't be sent and the first visit
+# waits ~1 minute for it to wake. This pings the service every 10 minutes.
+# GitHub may run scheduled jobs a few minutes late; that is fine here.
+name: Keep Render awake
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /health
+        run: curl --silent --show-error --max-time 120 --retry 2 https://email-jobscheduler-5qj0.onrender.com/health
